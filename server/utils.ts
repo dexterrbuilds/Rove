@@ -1,10 +1,13 @@
+import {parsePhoneNumberFromString} from 'libphonenumber-js/min';
+
 const LAMPORTS_PER_SOL_BIGINT = 1_000_000_000n;
 const MAX_TRANSFER_LAMPORTS = 1_000n * LAMPORTS_PER_SOL_BIGINT;
 
 export function normalizePhoneNumber(value: string) {
   const cleaned = value.trim().replace(/[\s()-]/g, '');
   const international = cleaned.startsWith('+') ? cleaned : `+${cleaned}`;
-  return /^\+[1-9]\d{7,14}$/.test(international) ? international : null;
+  const parsed = parsePhoneNumberFromString(international);
+  return parsed?.isValid() ? parsed.number : null;
 }
 
 export function parseSolAmount(value: string) {

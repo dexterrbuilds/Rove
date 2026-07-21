@@ -87,10 +87,13 @@ button { cursor: pointer; }
 .setup-form label > span { display: block; margin-bottom: 9px; font-size: 12px; font-weight: 800; }
 .input-shell { height: 55px; display: flex; align-items: center; gap: 12px; padding: 0 16px; border: 1px solid #d8dfd9; border-radius: 9px; background: #fbfcfa; transition: border .2s, box-shadow .2s; }
 .input-shell:focus-within { border-color: #52c96a; box-shadow: 0 0 0 3px rgba(82,201,106,.12); }
+.input-shell.invalid { border-color: #d75a5a; background: #fffafa; }
+.input-shell.invalid:focus-within { box-shadow: 0 0 0 3px rgba(215,90,90,.11); }
 .input-shell svg { color: #7b867d; }
 .input-shell input { width: 100%; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: 15px; }
 .pin-shell input { letter-spacing: 9px; }
 .setup-form small { display: block; margin-top: 7px; color: #89918a; font-size: 11px; }
+.setup-form small.field-error { color: #b13c3c; }
 .setup-form .primary-button { margin-top: 5px; width: 100%; }
 .form-error { padding: 11px 13px; border: 1px solid #f0b8b8; border-radius: 8px; color: #a52f2f; background: #fff7f7; font-size: 12px; }
 .success-wrap { text-align: center; display: flex; flex-direction: column; align-items: center; }

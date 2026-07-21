@@ -4,6 +4,7 @@ import {FormEvent, useMemo, useState} from 'react';
 import {getAccessToken, useHeadlessDelegatedActions, usePrivy, type WalletWithMetadata} from '@privy-io/react-auth';
 import {useWallets} from '@privy-io/react-auth/solana';
 import {ArrowRight, Check, Copy, LogOut, Radio, ShieldCheck, Signal, Smartphone, WalletCards} from 'lucide-react';
+import {parsePhoneNumberFromString} from 'libphonenumber-js/min';
 
 type Activation = {
   activationCode: string;
@@ -24,6 +25,23 @@ function shortenAddress(address: string) {
   return `${address.slice(0, 7)}···${address.slice(-7)}`;
 }
 
+function isValidInternationalPhone(value: string) {
+  if (!value.startsWith('+')) return false;
+  return parsePhoneNumberFromString(value)?.isValid() === true;
+}
+
+async function withTimeout<T>(promise: Promise<T>, milliseconds: number, message: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timer = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(new Error(message)), milliseconds);
+  });
+  try {
+    return await Promise.race([promise, timer]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 export default function Home() {
   const {ready, authenticated, login, logout, user} = usePrivy();
   const {wallets, ready: walletsReady} = useWallets();
@@ -31,17 +49,26 @@ export default function Home() {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [pin, setPin] = useState('');
   const [activation, setActivation] = useState<Activation | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const [submitPhase, setSubmitPhase] = useState<'delegating' | 'registering' | null>(null);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [phoneTouched, setPhoneTouched] = useState(false);
+  const [pinTouched, setPinTouched] = useState(false);
 
-  const wallet = useMemo(() => {
-    const embeddedAddress = user?.linkedAccounts.find(
+  const embeddedAccount = useMemo(
+    () => user?.linkedAccounts.find(
       (account): account is WalletWithMetadata =>
         account.type === 'wallet' && account.walletClientType === 'privy' && account.chainType === 'solana',
-    )?.address;
-    return wallets.find((candidate) => candidate.address === embeddedAddress);
-  }, [user, wallets]);
+    ),
+    [user],
+  );
+  const wallet = useMemo(
+    () => wallets.find((candidate) => candidate.address === embeddedAccount?.address),
+    [embeddedAccount, wallets],
+  );
+  const phoneIsValid = isValidInternationalPhone(phoneNumber);
+  const pinIsValid = /^\d{4}$/.test(pin);
+  const formIsValid = Boolean(wallet && phoneIsValid && pinIsValid);
 
   async function submitSetup(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -51,27 +78,40 @@ export default function Home() {
       setError('Your Solana wallet is still being created. Please try again in a moment.');
       return;
     }
-    if (!/^\+[1-9]\d{7,14}$/.test(phoneNumber)) {
+    setPhoneTouched(true);
+    setPinTouched(true);
+    if (!phoneIsValid) {
       setError('Enter a valid international number, including the + and country code.');
       return;
     }
-    if (!/^\d{4}$/.test(pin)) {
+    if (!pinIsValid) {
       setError('Your security PIN must contain exactly 4 digits.');
       return;
     }
 
-    setSubmitting(true);
+    setSubmitPhase('delegating');
     try {
       // Explicit consent is required before the server can sign while the user is offline.
-      await delegateWallet({address: wallet.address, chainType: 'solana'});
+      // Skip a redundant Privy request when this wallet was already delegated previously.
+      if (!embeddedAccount?.delegated) {
+        await withTimeout(
+          delegateWallet({address: wallet.address, chainType: 'solana'}),
+          30_000,
+          'Wallet authorization timed out. Confirm that server-side access and an authorization key are enabled in Privy, then try again.',
+        );
+      }
 
       const accessToken = await getAccessToken();
       if (!accessToken) throw new Error('Your session expired. Please sign in again.');
 
+      setSubmitPhase('registering');
       const activationCode = createActivationCode();
       const activationExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+      const controller = new AbortController();
+      const requestTimeout = window.setTimeout(() => controller.abort(), 75_000);
       const response = await fetch(`${API_URL}/profiles/register`, {
         method: 'POST',
+        signal: controller.signal,
         headers: {
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
@@ -83,7 +123,7 @@ export default function Home() {
           activationCode,
           activationExpiresAt,
         }),
-      });
+      }).finally(() => window.clearTimeout(requestTimeout));
       const payload = (await response.json()) as {error?: string; activationCode?: string; activationExpiresAt?: string};
       if (!response.ok || !payload.activationCode || !payload.activationExpiresAt) {
         throw new Error(payload.error ?? 'Could not save your offline access settings.');
@@ -96,9 +136,13 @@ export default function Home() {
         phoneNumber,
       });
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'Something went wrong. Please try again.');
+      if (caught instanceof DOMException && caught.name === 'AbortError') {
+        setError('The Rove API took too long to wake up. Open its /health URL, wait for it to respond, then try again.');
+      } else {
+        setError(caught instanceof Error ? caught.message : 'Something went wrong. Please try again.');
+      }
     } finally {
-      setSubmitting(false);
+      setSubmitPhase(null);
     }
   }
 
@@ -168,17 +212,17 @@ export default function Home() {
               <form onSubmit={submitSetup} className="setup-form">
                 <label>
                   <span>International phone number</span>
-                  <div className="input-shell"><Smartphone size={19} /><input type="tel" inputMode="tel" autoComplete="tel" placeholder="+234 801 234 5678" value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value.replace(/[\s()-]/g, ''))} /></div>
-                  <small>Use the number you will dial the USSD code from.</small>
+                  <div className={`input-shell ${phoneTouched && !phoneIsValid ? 'invalid' : ''}`}><Smartphone size={19} /><input type="tel" inputMode="tel" autoComplete="tel" placeholder="+234 801 234 5678" value={phoneNumber} aria-invalid={phoneTouched && !phoneIsValid} onBlur={() => setPhoneTouched(true)} onChange={(event) => { setPhoneNumber(event.target.value.replace(/[\s()-]/g, '')); setError(''); }} /></div>
+                  <small className={phoneTouched && !phoneIsValid ? 'field-error' : ''}>{phoneTouched && !phoneIsValid ? 'Enter a complete international number, including country code.' : 'Use the number you will dial the USSD code from.'}</small>
                 </label>
                 <label>
                   <span>4-digit transaction PIN</span>
-                  <div className="input-shell pin-shell"><ShieldCheck size={19} /><input type="password" inputMode="numeric" autoComplete="new-password" maxLength={4} placeholder="••••" value={pin} onChange={(event) => setPin(event.target.value.replace(/\D/g, '').slice(0, 4))} /></div>
-                  <small>This PIN approves offline transfers. Never share it.</small>
+                  <div className={`input-shell pin-shell ${pinTouched && !pinIsValid ? 'invalid' : ''}`}><ShieldCheck size={19} /><input type="password" inputMode="numeric" autoComplete="new-password" maxLength={4} placeholder="••••" value={pin} aria-invalid={pinTouched && !pinIsValid} onBlur={() => setPinTouched(true)} onChange={(event) => { setPin(event.target.value.replace(/\D/g, '').slice(0, 4)); setError(''); }} /></div>
+                  <small className={pinTouched && !pinIsValid ? 'field-error' : ''}>{pinTouched && !pinIsValid ? 'Enter exactly four digits.' : 'This PIN approves offline transfers. Never share it.'}</small>
                 </label>
                 {error && <div className="form-error" role="alert">{error}</div>}
-                <button className="primary-button" type="submit" disabled={submitting || !wallet}>
-                  {submitting ? 'Securing access…' : 'Generate activation code'} <ArrowRight size={18} />
+                <button className="primary-button" type="submit" disabled={Boolean(submitPhase) || !formIsValid}>
+                  {submitPhase === 'delegating' ? 'Authorizing wallet…' : submitPhase === 'registering' ? 'Saving secure setup…' : 'Generate activation code'} <ArrowRight size={18} />
                 </button>
               </form>
             </>
