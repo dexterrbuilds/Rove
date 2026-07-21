@@ -1,93 +1,77 @@
 # Rove
 
-Rove is an MVP bridge between a self-custodial Privy Solana wallet and feature-phone USSD. Users authenticate on the Next.js app, receive an embedded Solana wallet, link an international phone number with a short-lived code, and can then check balances or send SOL through Africa's Talking.
+**Your Solana wallet, within reach—even without mobile data.**
+
+Rove connects self-custodial Solana wallets to the mobile phones people already use. A user creates a wallet through a simple web experience, securely links their phone number, and can then check their balance or send SOL through USSD.
+
+The project explores a practical question: what would Web3 access look like if a smartphone, banking app, or reliable internet connection were not prerequisites?
+
+## Why Rove
+
+Millions of mobile users rely on feature phones, intermittent connectivity, or low-cost USSD services for everyday financial activity. Most blockchain products assume the opposite: a modern smartphone, a persistent data connection, a browser wallet, and familiarity with seed phrases.
+
+Rove bridges that gap by making a Solana wallet accessible through a familiar, session-based mobile menu while keeping wallet creation and account recovery within a self-custodial system.
+
+## How it works
+
+1. **Create a wallet** — The user signs in with email, Google, or SMS and receives a Privy-powered embedded Solana wallet.
+2. **Link a phone** — The user chooses a four-digit transaction PIN and receives a short-lived activation code.
+3. **Activate through USSD** — Dialing the Rove shortcode from the registered phone links that number to the wallet.
+4. **Transact offline** — The user can redial the shortcode to check their on-chain balance or send SOL to another registered phone number.
+
+```text
+Web3 Assistant
+1. Check Balance
+2. Send SOL
+```
+
+## MVP capabilities
+
+- Email, Google, and SMS onboarding
+- Automatic self-custodial Solana wallet provisioning
+- Secure phone activation with six-digit, time-limited codes
+- Native SOL balance checks over USSD
+- Phone-number-based SOL transfers
+- Four-digit offline transaction authorization
+- Delegated signing for user-approved offline wallet access
+- Protection against duplicate transfers caused by webhook retries
+- PIN attempt lockouts and transaction reconciliation records
+- Responsive web onboarding for mobile and desktop
 
 ## Architecture
 
-- **Web:** Next.js App Router + `@privy-io/react-auth`
-- **API:** Node.js + Express, including the Africa's Talking state machine
-- **Data:** Supabase Postgres, accessed only with the service role from the API
-- **Wallets:** Privy self-custodial embedded Solana wallets with delegated server access
-- **Chain:** `@solana/web3.js`, configured to mainnet by default
+Rove is organized as four cooperating layers:
 
-The browser never receives the Supabase service-role key, a PIN hash, the Privy app secret, or the authorization private key. PINs are bcrypt-hashed by the API. `phone_number` stays null until the pending number redeems its activation code over USSD.
+- **Next.js frontend** for authentication, wallet onboarding, phone registration, and activation guidance
+- **Node.js Express API** for authenticated profile registration and the Africa's Talking USSD state machine
+- **Supabase Postgres** for wallet profiles, phone-linking state, PIN hashes, and transfer records
+- **Privy and Solana** for self-custodial embedded wallets, delegated authorization, balances, and native transfers
 
-## Local setup
+Africa's Talking sends the user's accumulated USSD choices to the API. Rove determines the current menu step, verifies the linked profile and transaction PIN, resolves the recipient's wallet, and asks Privy to sign and broadcast the Solana transaction.
 
-Requirements: Node.js 20+, a Supabase project, a Privy app, and an Africa's Talking USSD channel.
+## Security model
 
-1. Install packages:
+Rove is designed so sensitive server credentials and PIN hashes never reach the browser.
 
-   ```bash
-   npm install
-   ```
+- Transaction PINs are stored as bcrypt hashes.
+- Phone numbers remain pending until activated from the intended handset.
+- Activation codes expire after 15 minutes and are cleared after use.
+- Wallet ownership is verified against the authenticated Privy user.
+- Offline signing requires explicit wallet delegation from the user.
+- Each USSD session can reserve only one transfer, preventing gateway retries from sending funds twice.
+- Repeated invalid PIN attempts temporarily lock offline transactions.
+- Supabase tables are protected from anonymous and browser-level access.
 
-2. Copy `.env.example` to `.env.local` for Next.js and to `.env` for Express, then fill in the credentials. The default local ports are web `3000` and API `3001` when `PORT=3001` is present in `.env`.
+## Project status
 
-3. Run [`supabase/migrations/202607210001_create_profiles.sql`](./supabase/migrations/202607210001_create_profiles.sql) in the Supabase SQL editor, or apply it with the Supabase CLI.
+Rove is an MVP framework intended for development, testing, and validation of the offline Solana experience. The application includes the complete onboarding, phone-linking, balance, and transfer flows, together with a deployment blueprint and database schema.
 
-4. In Privy:
+Production operation requires infrastructure-level monitoring, transaction reconciliation, a dedicated Solana RPC provider, strict Privy transfer policies, and the request-security controls supported by the selected USSD provider.
 
-   - enable Email, Google, and SMS login methods;
-   - enable Solana embedded wallets;
-   - enable server-side wallet access/delegated actions;
-   - create an authorization key and securely set its private key as `PRIVY_AUTHORIZATION_PRIVATE_KEY`;
-   - configure a narrow policy for native Solana System Program transfers and an MVP transfer ceiling;
-   - add localhost and deployed web origins as allowed app clients.
+## Technology
 
-5. Start both services:
+Next.js · React · TypeScript · Node.js · Express · Supabase · Privy · Solana · Africa's Talking
 
-   ```bash
-   npm run dev
-   ```
+## Vision
 
-6. Set the Africa's Talking callback URL to:
-
-   ```text
-   https://YOUR_API_HOST/ussd-blockchain
-   ```
-
-   Africa's Talking must send `application/x-www-form-urlencoded` POST fields named `sessionId`, `phoneNumber`, `networkCode`, and `text`.
-
-## Environment variables
-
-| Variable | Service | Purpose |
-| --- | --- | --- |
-| `NEXT_PUBLIC_PRIVY_APP_ID` | Web | Public Privy app identifier |
-| `NEXT_PUBLIC_API_URL` | Web | Public Express API origin |
-| `NEXT_PUBLIC_USSD_SHORTCODE` | Web | Code shown after onboarding |
-| `PORT` | API | Render-provided port; defaults to `3000` |
-| `WEB_ORIGIN` | API | Comma-separated allowed CORS origins |
-| `SUPABASE_URL` | API | Supabase project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | API | Server-only administrative key |
-| `PRIVY_APP_ID` / `PRIVY_APP_SECRET` | API | Server-side Privy credentials |
-| `PRIVY_AUTHORIZATION_PRIVATE_KEY` | API | P-256 key authorizing delegated requests |
-| `SOLANA_RPC_URL` | API | RPC endpoint used for balances and blockhashes |
-| `SOLANA_CAIP2` | API | Must identify the same cluster as the RPC URL |
-
-Supported CAIP-2 values are mainnet `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`, devnet `solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1`, and testnet `solana:4uhcVJyU9pJkvQyS88uRDiswHXSCkY3z`.
-
-## USSD navigation
-
-Africa's Talking accumulates each answer into the `text` field:
-
-```text
-""                              root menu
-"1"                             check balance
-"2"                             prompt for recipient
-"2*+2348012345678"              prompt for amount
-"2*+2348012345678*0.05"         prompt for PIN
-"2*+2348012345678*0.05*1234"    validate and transfer
-```
-
-The API reserves a unique row per `sessionId` before it calls Privy. This is an idempotency barrier against gateway retries. Five incorrect PINs lock the profile for 15 minutes. Failed or uncertain transactions should be reconciled from `public.ussd_transfers` and Privy transaction webhooks before an operator retries them.
-
-## Verification
-
-```bash
-npm run lint
-npm test
-npm run build
-```
-
-Before using mainnet, first test the full flow on devnet, configure an authenticated RPC provider, enable Africa's Talking request allowlisting/signature controls available to your account, add monitoring, and define operational reconciliation for transactions that broadcast successfully but time out before the USSD response returns.
+Rove's goal is to make access to open financial networks feel as ordinary as checking airtime: available from almost any phone, understandable without crypto expertise, and secure enough for everyday use.
