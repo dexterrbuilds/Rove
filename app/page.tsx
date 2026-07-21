@@ -1,9 +1,9 @@
 'use client';
 
-import {FormEvent, useMemo, useState} from 'react';
+import {FormEvent, useCallback, useEffect, useMemo, useState} from 'react';
 import {getAccessToken, usePrivy, useSigners, type WalletWithMetadata} from '@privy-io/react-auth';
 import {useWallets} from '@privy-io/react-auth/solana';
-import {ArrowRight, Check, Copy, LogOut, Radio, ShieldCheck, Signal, Smartphone, WalletCards} from 'lucide-react';
+import {ArrowRight, Check, Copy, ExternalLink, LogOut, Radio, RefreshCw, ShieldCheck, Signal, Smartphone, WalletCards} from 'lucide-react';
 import {parsePhoneNumberFromString} from 'libphonenumber-js/min';
 
 type Activation = {
@@ -11,6 +11,11 @@ type Activation = {
   activationExpiresAt: string;
   phoneNumber: string;
 };
+
+type ProfileStatus =
+  | {status: 'not_started'; phoneNumber?: string | null; walletAddress?: string; activationExpired?: boolean}
+  | {status: 'pending'; phoneNumber: string; walletAddress: string; activationCode: string; activationExpiresAt: string}
+  | {status: 'linked'; phoneNumber: string; walletAddress: string};
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 const USSD_CODE = process.env.NEXT_PUBLIC_USSD_SHORTCODE ?? '*384*1234#';
@@ -59,6 +64,10 @@ export default function Home() {
   const [copied, setCopied] = useState(false);
   const [phoneTouched, setPhoneTouched] = useState(false);
   const [pinTouched, setPinTouched] = useState(false);
+  const [profileStatus, setProfileStatus] = useState<ProfileStatus | null>(null);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [statusError, setStatusError] = useState('');
+  const [checkingActivation, setCheckingActivation] = useState(false);
 
   const embeddedAccount = useMemo(
     () => user?.linkedAccounts.find(
@@ -71,9 +80,80 @@ export default function Home() {
     () => wallets.find((candidate) => candidate.address === embeddedAccount?.address),
     [embeddedAccount, wallets],
   );
+  const walletAddress = wallet?.address;
   const phoneIsValid = isValidInternationalPhone(phoneNumber);
   const pinIsValid = /^\d{4}$/.test(pin);
   const formIsValid = Boolean(wallet && phoneIsValid && pinIsValid && PRIVY_SIGNER_ID);
+
+  const refreshProfile = useCallback(async (quiet = false, showChecking = false) => {
+    if (!authenticated || !walletAddress) return;
+    if (!quiet) setProfileLoading(true);
+    if (showChecking) setCheckingActivation(true);
+
+    try {
+      const accessToken = await getAccessToken();
+      if (!accessToken) throw new Error('Your session expired. Please sign in again.');
+      const response = await fetch(`${API_URL}/profiles/me`, {
+        headers: {Authorization: `Bearer ${accessToken}`},
+        cache: 'no-store',
+      });
+      const payload = (await response.json()) as ProfileStatus & {error?: string};
+      if (!response.ok) throw new Error(payload.error ?? 'Could not restore your offline access status.');
+
+      setProfileStatus(payload);
+      setStatusError('');
+      if (payload.status === 'linked') {
+        setPhoneNumber(payload.phoneNumber);
+        setActivation(null);
+      } else if (payload.status === 'pending') {
+        setPhoneNumber(payload.phoneNumber);
+        setActivation({
+          phoneNumber: payload.phoneNumber,
+          activationCode: payload.activationCode,
+          activationExpiresAt: payload.activationExpiresAt,
+        });
+      } else {
+        setActivation(null);
+        if (payload.phoneNumber) setPhoneNumber(payload.phoneNumber);
+      }
+    } catch (caught) {
+      if (!quiet) setStatusError(caught instanceof Error ? caught.message : 'Could not load your account status.');
+    } finally {
+      setProfileLoading(false);
+      if (showChecking) setCheckingActivation(false);
+    }
+  }, [authenticated, walletAddress]);
+
+  useEffect(() => {
+    if (!authenticated || !walletAddress) return;
+    const timeout = window.setTimeout(() => void refreshProfile(), 0);
+    return () => window.clearTimeout(timeout);
+  }, [authenticated, walletAddress, refreshProfile]);
+
+  useEffect(() => {
+    if (profileStatus?.status !== 'pending') return;
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshProfile(true);
+    }, 5_000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void refreshProfile(true);
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [profileStatus?.status, refreshProfile]);
+
+  useEffect(() => {
+    if (!authenticated) return;
+    // Keeps an active dashboard session responsive. For zero-visitor uptime, point
+    // an external monitor at /api/health as documented in SETUP.local.md.
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void fetch('/api/health', {cache: 'no-store'}).catch(() => undefined);
+    }, 8 * 60 * 1_000);
+    return () => window.clearInterval(interval);
+  }, [authenticated]);
 
   async function submitSetup(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -136,16 +216,24 @@ export default function Home() {
           activationExpiresAt,
         }),
       }).finally(() => window.clearTimeout(requestTimeout));
-      const payload = (await response.json()) as {error?: string; activationCode?: string; activationExpiresAt?: string};
+      const payload = (await response.json()) as {error?: string; activationCode?: string; activationExpiresAt?: string; phoneNumber?: string};
       if (!response.ok || !payload.activationCode || !payload.activationExpiresAt) {
         throw new Error(payload.error ?? 'Could not save your offline access settings.');
       }
 
       setPin('');
-      setActivation({
+      const normalizedPhone = payload.phoneNumber ?? phoneNumber;
+      const pendingActivation = {
         activationCode: payload.activationCode,
         activationExpiresAt: payload.activationExpiresAt,
-        phoneNumber,
+        phoneNumber: normalizedPhone,
+      };
+      setPhoneNumber(normalizedPhone);
+      setActivation(pendingActivation);
+      setProfileStatus({
+        status: 'pending',
+        walletAddress: wallet.address,
+        ...pendingActivation,
       });
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === 'AbortError') {
@@ -198,13 +286,21 @@ export default function Home() {
             </div>
             {wallet ? (
               <>
-                <strong>{shortenAddress(wallet.address)}</strong>
+                <strong title={wallet.address}>{shortenAddress(wallet.address)}</strong>
                 <button onClick={copyAddress}>{copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copied' : 'Copy address'}</button>
               </>
             ) : (
               <strong>Creating wallet…</strong>
             )}
           </div>
+
+          {profileStatus?.status === 'linked' && (
+            <div className="phone-status-card">
+              <span><Smartphone size={16} /> USSD phone</span>
+              <strong>{profileStatus.phoneNumber}</strong>
+              <small><i /> Linked and ready</small>
+            </div>
+          )}
 
           <div className="security-note">
             <ShieldCheck size={20} />
@@ -213,13 +309,32 @@ export default function Home() {
         </aside>
 
         <section className="setup-panel">
-          {activation ? (
-            <ActivationSuccess activation={activation} />
+          {profileLoading && !profileStatus ? (
+            <StatusLoading />
+          ) : profileStatus?.status === 'linked' ? (
+            <OfflineAccessReady profile={profileStatus} />
+          ) : activation ? (
+            <ActivationSuccess
+              activation={activation}
+              walletAddress={wallet?.address ?? profileStatus?.walletAddress ?? ''}
+              checking={checkingActivation}
+              onRefresh={() => void refreshProfile(true, true)}
+            />
           ) : (
             <>
               <div className="step-label"><span>01</span> OFFLINE ACCESS</div>
               <h2>Connect your phone</h2>
               <p className="lede">Your number becomes a simple address for sending and receiving SOL over USSD.</p>
+
+              {profileStatus?.status === 'not_started' && profileStatus.activationExpired && (
+                <div className="notice-card"><Radio size={17} /><p><strong>Your previous code expired.</strong><br />Confirm your number and PIN to generate a fresh one.</p></div>
+              )}
+              {statusError && (
+                <div className="form-error status-error" role="alert">
+                  <span>{statusError}</span>
+                  <button type="button" onClick={() => void refreshProfile()}><RefreshCw size={14} /> Retry</button>
+                </div>
+              )}
 
               <form onSubmit={submitSetup} className="setup-form">
                 <label>
@@ -234,7 +349,7 @@ export default function Home() {
                 </label>
                 {error && <div className="form-error" role="alert">{error}</div>}
                 {!PRIVY_SIGNER_ID && <div className="form-error" role="alert">Privy signer configuration is missing. Add <code>NEXT_PUBLIC_PRIVY_SIGNER_ID</code> to the web service and rebuild.</div>}
-                <button className="primary-button" type="submit" disabled={Boolean(submitPhase) || !formIsValid}>
+                <button className="primary-button" type="submit" disabled={Boolean(submitPhase) || !formIsValid} aria-busy={Boolean(submitPhase)}>
                   {submitPhase === 'delegating' ? 'Adding secure signer…' : submitPhase === 'registering' ? 'Saving secure setup…' : 'Generate activation code'} <ArrowRight size={18} />
                 </button>
               </form>
@@ -246,25 +361,123 @@ export default function Home() {
   );
 }
 
-function ActivationSuccess({activation}: {activation: Activation}) {
+function ActivationSuccess({
+  activation,
+  walletAddress,
+  checking,
+  onRefresh,
+}: {
+  activation: Activation;
+  walletAddress: string;
+  checking: boolean;
+  onRefresh: () => void;
+}) {
+  const [remainingSeconds, setRemainingSeconds] = useState(15 * 60);
+  const [copiedItem, setCopiedItem] = useState<'code' | 'shortcode' | null>(null);
+  useEffect(() => {
+    const updateCountdown = () => setRemainingSeconds(Math.max(
+      0,
+      Math.ceil((new Date(activation.activationExpiresAt).getTime() - Date.now()) / 1_000),
+    ));
+    const timeout = window.setTimeout(updateCountdown, 0);
+    const interval = window.setInterval(updateCountdown, 1_000);
+    return () => {
+      window.clearTimeout(timeout);
+      window.clearInterval(interval);
+    };
+  }, [activation.activationExpiresAt]);
+
   const expiration = new Date(activation.activationExpiresAt).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
+
+  async function copyValue(item: 'code' | 'shortcode', value: string) {
+    await navigator.clipboard.writeText(value);
+    setCopiedItem(item);
+    window.setTimeout(() => setCopiedItem(null), 1_800);
+  }
+
   return (
     <div className="success-wrap">
       <div className="success-icon"><Check size={28} strokeWidth={2.5} /></div>
       <div className="step-label"><span>02</span> ACTIVATE</div>
       <h2>Finish on your phone</h2>
       <p className="lede">Dial <strong>{USSD_CODE}</strong> from <strong>{activation.phoneNumber}</strong>, then enter this one-time code.</p>
-      <div className="activation-code" aria-label={`Activation code ${activation.activationCode}`}>
+      <button className="activation-code" type="button" onClick={() => void copyValue('code', activation.activationCode)} aria-label={`Copy activation code ${activation.activationCode}`}>
         {activation.activationCode.split('').map((digit, index) => <span key={`${digit}-${index}`}>{digit}</span>)}
+      </button>
+      <div className={`expiry ${remainingSeconds === 0 ? 'expired' : ''}`}>
+        <Radio size={16} /> {remainingSeconds > 0 ? `Expires in ${formatCountdown(remainingSeconds)} · ${expiration}` : 'Code expired—checking your status'}
       </div>
-      <div className="expiry"><Radio size={16} /> Code expires at {expiration}</div>
+      {walletAddress && <div className="activation-wallet"><WalletCards size={15} /> <span>Wallet</span><code>{walletAddress}</code></div>}
+      <div className="activation-actions">
+        <a className="secondary-button" href={`tel:${USSD_CODE.replace('#', '%23')}`}><Smartphone size={16} /> Dial {USSD_CODE}</a>
+        <button className="secondary-button" type="button" onClick={() => void copyValue('shortcode', USSD_CODE)}>
+          {copiedItem === 'shortcode' ? <Check size={16} /> : <Copy size={16} />} {copiedItem === 'shortcode' ? 'Copied' : 'Copy shortcode'}
+        </button>
+      </div>
+      {copiedItem === 'code' && <div className="copy-toast" role="status"><Check size={14} /> Activation code copied</div>}
       <div className="ussd-steps">
         <div><span>1</span><p><strong>Dial the shortcode</strong><br />Open your phone dialer and enter {USSD_CODE}</p></div>
         <div><span>2</span><p><strong>Enter the code above</strong><br />Your number will be linked instantly.</p></div>
         <div><span>3</span><p><strong>Redial to transact</strong><br />Check balances or send SOL without data.</p></div>
       </div>
+      <button className="check-status-button" type="button" onClick={onRefresh} disabled={checking}>
+        <RefreshCw size={15} className={checking ? 'spinning' : ''} /> {checking ? 'Checking activation…' : 'I completed activation'}
+      </button>
     </div>
   );
+}
+
+function OfflineAccessReady({profile}: {profile: Extract<ProfileStatus, {status: 'linked'}>}) {
+  const [copied, setCopied] = useState(false);
+
+  async function copyShortcode() {
+    await navigator.clipboard.writeText(USSD_CODE);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1_800);
+  }
+
+  return (
+    <div className="ready-wrap">
+      <div className="success-icon"><Check size={28} strokeWidth={2.5} /></div>
+      <div className="step-label"><span>✓</span> OFFLINE ACCESS ACTIVE</div>
+      <h2>Your phone is ready</h2>
+      <p className="lede"><strong>{profile.phoneNumber}</strong> is securely linked to your Rove wallet.</p>
+      <div className="ready-summary">
+        <div><Smartphone size={18} /><span>Linked phone</span><strong>{profile.phoneNumber}</strong></div>
+        <div><WalletCards size={18} /><span>Solana wallet</span><code>{profile.walletAddress}</code></div>
+      </div>
+      <div className="ready-callout">
+        <span>Dial from your linked phone</span>
+        <strong>{USSD_CODE}</strong>
+        <p>Check your SOL balance or send SOL to another registered number—no mobile data needed.</p>
+      </div>
+      <div className="activation-actions">
+        <a className="primary-button" href={`tel:${USSD_CODE.replace('#', '%23')}`}><Smartphone size={17} /> Dial now</a>
+        <button className="secondary-button" type="button" onClick={() => void copyShortcode()}>
+          {copied ? <Check size={16} /> : <Copy size={16} />} {copied ? 'Copied' : 'Copy code'}
+        </button>
+      </div>
+      <a className="explorer-link" href={`https://solscan.io/account/${profile.walletAddress}`} target="_blank" rel="noreferrer">
+        View wallet on Solscan <ExternalLink size={14} />
+      </a>
+    </div>
+  );
+}
+
+function StatusLoading() {
+  return (
+    <div className="status-loading">
+      <div className="loader" />
+      <h2>Restoring your setup</h2>
+      <p>Checking whether your phone is already linked…</p>
+    </div>
+  );
+}
+
+function formatCountdown(totalSeconds: number) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 function Onboarding({onLogin}: {onLogin: () => void}) {

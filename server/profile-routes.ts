@@ -15,6 +15,68 @@ const registrationSchema = z.object({
 
 export const profileRouter = Router();
 
+profileRouter.use((_request, response, next) => {
+  // Profile responses can contain phone and one-time activation details.
+  response.set('Cache-Control', 'no-store');
+  next();
+});
+
+profileRouter.get('/me', async (request, response) => {
+  try {
+    const token = request.headers.authorization?.match(/^Bearer (.+)$/)?.[1];
+    if (!token) return response.status(401).json({error: 'Missing authentication token.'});
+
+    const claims = await privy.utils().auth().verifyAuthToken(token);
+    const {data: profile, error} = await supabase
+      .from('profiles')
+      .select('solana_wallet_address, phone_number, pending_phone_number, activation_code, activation_expires_at')
+      .eq('privy_user_id', claims.user_id)
+      .maybeSingle<{
+        solana_wallet_address: string;
+        phone_number: string | null;
+        pending_phone_number: string | null;
+        activation_code: string | null;
+        activation_expires_at: string | null;
+      }>();
+    if (error) throw error;
+
+    if (!profile) return response.json({status: 'not_started'});
+    if (profile.phone_number) {
+      return response.json({
+        status: 'linked',
+        phoneNumber: profile.phone_number,
+        walletAddress: profile.solana_wallet_address,
+      });
+    }
+
+    const activationIsCurrent = Boolean(
+      profile.activation_code
+      && profile.activation_expires_at
+      && profile.pending_phone_number
+      && new Date(profile.activation_expires_at).getTime() > Date.now(),
+    );
+    if (activationIsCurrent) {
+      return response.json({
+        status: 'pending',
+        phoneNumber: profile.pending_phone_number,
+        walletAddress: profile.solana_wallet_address,
+        activationCode: profile.activation_code,
+        activationExpiresAt: profile.activation_expires_at,
+      });
+    }
+
+    return response.json({
+      status: 'not_started',
+      phoneNumber: profile.pending_phone_number,
+      walletAddress: profile.solana_wallet_address,
+      activationExpired: Boolean(profile.activation_code),
+    });
+  } catch (error) {
+    console.error('Profile status lookup failed:', safeErrorMessage(error));
+    return response.status(500).json({error: 'Could not load your offline access status.'});
+  }
+});
+
 profileRouter.post('/register', async (request, response) => {
   try {
     const token = request.headers.authorization?.match(/^Bearer (.+)$/)?.[1];

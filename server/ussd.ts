@@ -51,11 +51,21 @@ ussdRouter.post('/ussd-blockchain', async (request, response) => {
 });
 
 async function handlePhoneLinking(phoneNumber: string, text: string, response: Response) {
+  const {data: pendingProfile} = await supabase
+    .from('profiles')
+    .select('solana_wallet_address')
+    .eq('pending_phone_number', phoneNumber)
+    .maybeSingle<{solana_wallet_address: string}>();
+  const pendingWallet = pendingProfile?.solana_wallet_address;
+
   if (text === '') {
-    return response.send(textResponse('CON', 'Welcome! Enter the 6-digit Activation Code found on your web dashboard to link this phone number:'));
+    return response.send(textResponse(
+      'CON',
+      walletMessage(pendingWallet, 'Welcome! Enter the 6-digit Activation Code from your Rove dashboard:'),
+    ));
   }
   if (!/^\d{6}$/.test(text)) {
-    return response.send(textResponse('END', 'Error: Invalid or expired activation code.'));
+    return response.send(textResponse('END', walletMessage(pendingWallet, 'Error: Invalid or expired activation code.')));
   }
 
   // Binding the pending number prevents a code viewed by one user from being redeemed by another phone.
@@ -72,13 +82,16 @@ async function handlePhoneLinking(phoneNumber: string, text: string, response: R
     .eq('pending_phone_number', phoneNumber)
     .gt('activation_expires_at', new Date().toISOString())
     .is('phone_number', null)
-    .select('id')
-    .maybeSingle();
+    .select('id, solana_wallet_address')
+    .maybeSingle<{id: string; solana_wallet_address: string}>();
 
   if (error || !data) {
-    return response.send(textResponse('END', 'Error: Invalid or expired activation code.'));
+    return response.send(textResponse('END', walletMessage(pendingWallet, 'Error: Invalid or expired activation code.')));
   }
-  return response.send(textResponse('END', 'Activation Successful! Your phone is now securely linked. Redial the USSD code to transact.'));
+  return response.send(textResponse(
+    'END',
+    walletMessage(data.solana_wallet_address, 'Activation successful! Your phone is linked. Redial to transact.'),
+  ));
 }
 
 async function handleLinkedMenu(profile: Profile, sessionId: string, text: string, response: Response) {
@@ -86,41 +99,44 @@ async function handleLinkedMenu(profile: Profile, sessionId: string, text: strin
   // Index 0 = root choice, 1 = recipient phone, 2 = SOL amount, 3 = PIN.
   // Example: "2*+2348012345678*0.05*1234" becomes four screen-step segments.
   const steps = text === '' ? [] : text.split('*');
+  const reply = (prefix: 'CON' | 'END', message: string) => response.send(
+    textResponse(prefix, walletMessage(profile.solana_wallet_address, message)),
+  );
 
   if (steps.length === 0) {
-    return response.send('CON Web3 Assistant \n1. Check Balance \n2. Send SOL');
+    return reply('CON', 'Web3 Assistant\n1. Check Balance\n2. Send SOL');
   }
   if (steps[0] === '1' && steps.length === 1) {
     const balance = await solana.getBalance(new PublicKey(profile.solana_wallet_address), 'confirmed');
-    return response.send(textResponse('END', `Your on-chain balance is: ${formatSolBalance(balance)} SOL`));
+    return reply('END', `Your on-chain balance is: ${formatSolBalance(balance)} SOL`);
   }
   if (steps[0] !== '2') {
-    return response.send(textResponse('END', 'Error: Invalid menu selection.'));
+    return reply('END', 'Error: Invalid menu selection.');
   }
   if (steps.length === 1) {
-    return response.send(textResponse('CON', 'Enter Recipient Phone Number:'));
+    return reply('CON', 'Enter Recipient Phone Number:');
   }
 
   const recipientPhone = normalizePhoneNumber(steps[1]);
   if (!recipientPhone) {
-    return response.send(textResponse('END', 'Error: Enter a valid international recipient phone number.'));
+    return reply('END', 'Error: Enter a valid international recipient phone number.');
   }
   if (steps.length === 2) {
-    return response.send(textResponse('CON', 'Enter Amount to Transfer (in SOL):'));
+    return reply('CON', `To: ${recipientPhone}\nEnter amount to transfer (SOL):`);
   }
 
   const lamports = parseSolAmount(steps[2]);
   if (!lamports) {
-    return response.send(textResponse('END', 'Error: Enter a valid SOL amount.'));
+    return reply('END', 'Error: Enter a valid SOL amount.');
   }
   if (steps.length === 3) {
-    return response.send(textResponse('CON', 'Enter your 4-Digit Security PIN:'));
+    return reply('CON', `Send ${steps[2]} SOL to ${recipientPhone}\nEnter your 4-Digit Security PIN:`);
   }
   if (steps.length !== 4 || !/^\d{4}$/.test(steps[3])) {
-    return response.send(textResponse('END', 'Error: Invalid Security PIN.'));
+    return reply('END', 'Error: Invalid Security PIN.');
   }
   if (profile.pin_locked_until && new Date(profile.pin_locked_until).getTime() > Date.now()) {
-    return response.send(textResponse('END', 'Error: Too many PIN attempts. Try again in 15 minutes.'));
+    return reply('END', 'Error: Too many PIN attempts. Try again in 15 minutes.');
   }
   if (!profile.hashed_pin || !(await verifyPin(steps[3], profile.hashed_pin))) {
     const failedAttempts = profile.failed_pin_attempts + 1;
@@ -128,7 +144,7 @@ async function handleLinkedMenu(profile: Profile, sessionId: string, text: strin
       failed_pin_attempts: failedAttempts >= 5 ? 0 : failedAttempts,
       pin_locked_until: failedAttempts >= 5 ? new Date(Date.now() + 15 * 60 * 1000).toISOString() : null,
     }).eq('id', profile.id);
-    return response.send(textResponse('END', 'Error: Invalid Security PIN.'));
+    return reply('END', 'Error: Invalid Security PIN.');
   }
   if (profile.failed_pin_attempts > 0 || profile.pin_locked_until) {
     await supabase.from('profiles').update({failed_pin_attempts: 0, pin_locked_until: null}).eq('id', profile.id);
@@ -141,10 +157,10 @@ async function handleLinkedMenu(profile: Profile, sessionId: string, text: strin
     .maybeSingle<{id: string; solana_wallet_address: string}>();
   if (recipientError) throw recipientError;
   if (!recipient) {
-    return response.send(textResponse('END', 'Error: Recipient phone number is not registered.'));
+    return reply('END', 'Error: Recipient phone number is not registered.');
   }
   if (!profile.privy_wallet_id) {
-    return response.send(textResponse('END', 'Error: Wallet is not enabled for offline signing.'));
+    return reply('END', 'Error: Wallet is not enabled for offline signing.');
   }
 
   const referenceId = createHash('sha256').update(sessionId).digest('hex').slice(0, 48);
@@ -169,9 +185,9 @@ async function handleLinkedMenu(profile: Profile, sessionId: string, text: strin
       .eq('session_id', sessionId)
       .maybeSingle();
     if (previous?.status === 'confirmed' && previous.signature) {
-      return response.send(transferSuccess(steps[2], previous.recipient_phone_number, previous.signature));
+      return reply('END', transferSuccessMessage(steps[2], previous.recipient_phone_number, previous.signature));
     }
-    return response.send(textResponse('END', 'Transfer is already being processed.'));
+    return reply('END', 'Transfer is already being processed.');
   }
   if (reservationError || !reservation) throw reservationError ?? new Error('Could not reserve transfer');
 
@@ -188,14 +204,14 @@ async function handleLinkedMenu(profile: Profile, sessionId: string, text: strin
       .update({status: 'confirmed', signature})
       .eq('id', reservation.id);
     if (persistenceError) console.error('Could not persist confirmed transfer:', persistenceError.message);
-    return response.send(transferSuccess(steps[2], recipientPhone, signature));
+    return reply('END', transferSuccessMessage(steps[2], recipientPhone, signature));
   } catch (error) {
     await supabase
       .from('ussd_transfers')
       .update({status: 'unknown', error_message: safeErrorMessage(error).slice(0, 500)})
       .eq('id', reservation.id);
     console.error('Solana transfer failed:', safeErrorMessage(error));
-    return response.send(textResponse('END', 'Error: Transfer status is uncertain. Do not retry; check your wallet.'));
+    return reply('END', 'Error: Transfer status is uncertain. Do not retry; check your wallet.');
   }
 }
 
@@ -232,6 +248,10 @@ async function sendSolTransfer(input: {
   return result.hash;
 }
 
-function transferSuccess(amount: string, recipientPhone: string, signature: string) {
-  return textResponse('END', `Transfer Confirmed! Sent ${amount} SOL to ${recipientPhone}. Signature: ${signature.slice(0, 10)}...`);
+function transferSuccessMessage(amount: string, recipientPhone: string, signature: string) {
+  return `Transfer Confirmed! Sent ${amount} SOL to ${recipientPhone}. Signature: ${signature.slice(0, 10)}...`;
+}
+
+function walletMessage(walletAddress: string | null | undefined, message: string) {
+  return walletAddress ? `Wallet: ${walletAddress}\n${message}` : message;
 }
