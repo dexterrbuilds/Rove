@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: rove-api
+    runtime: node
+    plan: starter
+    buildCommand: npm install && npm run build:api
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: WEB_ORIGIN
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: PRIVY_APP_ID
+        sync: false
+      - key: PRIVY_APP_SECRET
+        sync: false
+      - key: PRIVY_AUTHORIZATION_PRIVATE_KEY
+        sync: false
+      - key: SOLANA_RPC_URL
+        sync: false
+      - key: SOLANA_CAIP2
+        value: solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp
+
+  - type: web
+    name: rove-web
+    runtime: node
+    plan: starter
+    buildCommand: npm install && npm run build:web
+    startCommand: npm run start:web
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: NEXT_PUBLIC_PRIVY_APP_ID
+        sync: false
+      - key: NEXT_PUBLIC_API_URL
+        sync: false
+      - key: NEXT_PUBLIC_USSD_SHORTCODE
+        sync: false
