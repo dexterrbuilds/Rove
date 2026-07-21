@@ -37,6 +37,10 @@ services:
         value: "20"
       - key: NEXT_PUBLIC_PRIVY_APP_ID
         sync: false
+      - key: NEXT_PUBLIC_PRIVY_SIGNER_ID
+        sync: false
+      - key: NEXT_PUBLIC_PRIVY_POLICY_IDS
+        sync: false
       - key: NEXT_PUBLIC_API_URL
         sync: false
       - key: NEXT_PUBLIC_USSD_SHORTCODE

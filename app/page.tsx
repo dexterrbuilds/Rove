@@ -1,7 +1,7 @@
 'use client';
 
 import {FormEvent, useMemo, useState} from 'react';
-import {getAccessToken, useHeadlessDelegatedActions, usePrivy, type WalletWithMetadata} from '@privy-io/react-auth';
+import {getAccessToken, usePrivy, useSigners, type WalletWithMetadata} from '@privy-io/react-auth';
 import {useWallets} from '@privy-io/react-auth/solana';
 import {ArrowRight, Check, Copy, LogOut, Radio, ShieldCheck, Signal, Smartphone, WalletCards} from 'lucide-react';
 import {parsePhoneNumberFromString} from 'libphonenumber-js/min';
@@ -14,6 +14,11 @@ type Activation = {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 const USSD_CODE = process.env.NEXT_PUBLIC_USSD_SHORTCODE ?? '*384*1234#';
+const PRIVY_SIGNER_ID = process.env.NEXT_PUBLIC_PRIVY_SIGNER_ID;
+const PRIVY_POLICY_IDS = (process.env.NEXT_PUBLIC_PRIVY_POLICY_IDS ?? '')
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
 
 function createActivationCode() {
   const values = new Uint32Array(1);
@@ -45,7 +50,7 @@ async function withTimeout<T>(promise: Promise<T>, milliseconds: number, message
 export default function Home() {
   const {ready, authenticated, login, logout, user} = usePrivy();
   const {wallets, ready: walletsReady} = useWallets();
-  const {delegateWallet} = useHeadlessDelegatedActions();
+  const {addSigners} = useSigners();
   const [phoneNumber, setPhoneNumber] = useState('');
   const [pin, setPin] = useState('');
   const [activation, setActivation] = useState<Activation | null>(null);
@@ -68,7 +73,7 @@ export default function Home() {
   );
   const phoneIsValid = isValidInternationalPhone(phoneNumber);
   const pinIsValid = /^\d{4}$/.test(pin);
-  const formIsValid = Boolean(wallet && phoneIsValid && pinIsValid);
+  const formIsValid = Boolean(wallet && phoneIsValid && pinIsValid && PRIVY_SIGNER_ID);
 
   async function submitSetup(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -76,6 +81,10 @@ export default function Home() {
 
     if (!wallet) {
       setError('Your Solana wallet is still being created. Please try again in a moment.');
+      return;
+    }
+    if (!PRIVY_SIGNER_ID) {
+      setError('Rove is missing its Privy signer ID. Add NEXT_PUBLIC_PRIVY_SIGNER_ID to the web service and rebuild it.');
       return;
     }
     setPhoneTouched(true);
@@ -91,13 +100,16 @@ export default function Home() {
 
     setSubmitPhase('delegating');
     try {
-      // Explicit consent is required before the server can sign while the user is offline.
-      // Skip a redundant Privy request when this wallet was already delegated previously.
+      // Explicit user consent adds the app's authorization-key quorum as a scoped
+      // signer. The matching private key exists only on the backend.
       if (!embeddedAccount?.delegated) {
         await withTimeout(
-          delegateWallet({address: wallet.address, chainType: 'solana'}),
+          addSigners({
+            address: wallet.address,
+            signers: [{signerId: PRIVY_SIGNER_ID, policyIds: PRIVY_POLICY_IDS}],
+          }),
           30_000,
-          'Wallet authorization timed out. Confirm that server-side access and an authorization key are enabled in Privy, then try again.',
+          'Adding the Privy signer timed out. Confirm that the signer ID is the key quorum ID from the same Privy app.',
         );
       }
 
@@ -221,8 +233,9 @@ export default function Home() {
                   <small className={pinTouched && !pinIsValid ? 'field-error' : ''}>{pinTouched && !pinIsValid ? 'Enter exactly four digits.' : 'This PIN approves offline transfers. Never share it.'}</small>
                 </label>
                 {error && <div className="form-error" role="alert">{error}</div>}
+                {!PRIVY_SIGNER_ID && <div className="form-error" role="alert">Privy signer configuration is missing. Add <code>NEXT_PUBLIC_PRIVY_SIGNER_ID</code> to the web service and rebuild.</div>}
                 <button className="primary-button" type="submit" disabled={Boolean(submitPhase) || !formIsValid}>
-                  {submitPhase === 'delegating' ? 'Authorizing wallet…' : submitPhase === 'registering' ? 'Saving secure setup…' : 'Generate activation code'} <ArrowRight size={18} />
+                  {submitPhase === 'delegating' ? 'Adding secure signer…' : submitPhase === 'registering' ? 'Saving secure setup…' : 'Generate activation code'} <ArrowRight size={18} />
                 </button>
               </form>
             </>
