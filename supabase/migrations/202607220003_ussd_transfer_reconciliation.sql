@@ -13,7 +13,10 @@ alter table public.ussd_transfers
 update public.ussd_transfers
 set status = 'failed'
 where status = 'unknown'
-  and error_message ~ '^(400|401|403|404|422)([[:space:]]|$)';
+  and (
+    error_message ~ '^(400|401|403|404|422)([[:space:]]|$)'
+    or error_message = 'Invalid wallet authorization private key'
+  );
 
 create index if not exists ussd_transfers_reconciliation_lookup
   on public.ussd_transfers (sender_profile_id, status, created_at desc)

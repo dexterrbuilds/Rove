@@ -22,7 +22,8 @@ export function authorizationPublicKeyFromPrivateKey(value: string) {
     if (privateKey.asymmetricKeyType !== 'ec' || privateKey.asymmetricKeyDetails?.namedCurve !== 'prime256v1') {
       throw new Error('wrong curve');
     }
-    return createPublicKey(privateKey).export({format: 'der', type: 'spki'}).toString('base64');
+    const privateKeyPem = privateKey.export({format: 'pem', type: 'pkcs8'});
+    return createPublicKey(privateKeyPem).export({format: 'der', type: 'spki'}).toString('base64');
   } catch {
     throw new Error('Privy authorization key must be a base64 PKCS8 P-256 private key.');
   }
