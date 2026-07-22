@@ -4,7 +4,7 @@ import {PublicKey, SystemProgram, Transaction} from '@solana/web3.js';
 import {getConfig} from './config.js';
 import {privy, solana, supabase} from './clients.js';
 import {verifyPin} from './profile-routes.js';
-import {formatSolBalance, normalizePhoneNumber, parseSolAmount, safeErrorMessage, textResponse} from './utils.js';
+import {formatSolBalance, formatWalletAddress, normalizePhoneNumber, parseSolAmount, safeErrorMessage, textResponse} from './utils.js';
 
 type Profile = {
   id: string;
@@ -130,7 +130,7 @@ async function handleLinkedMenu(profile: Profile, sessionId: string, text: strin
     return reply('END', 'Error: Enter a valid SOL amount.');
   }
   if (steps.length === 3) {
-    return reply('CON', `Send ${steps[2]} SOL to ${recipientPhone}\nEnter your 4-Digit Security PIN:`);
+    return reply('CON', `Send ${steps[2]} SOL to ${recipientPhone}\nEnter your 4-Digit PIN to authorize:`);
   }
   if (steps.length !== 4 || !/^\d{4}$/.test(steps[3])) {
     return reply('END', 'Error: Invalid Security PIN.');
@@ -253,5 +253,5 @@ function transferSuccessMessage(amount: string, recipientPhone: string, signatur
 }
 
 function walletMessage(walletAddress: string | null | undefined, message: string) {
-  return walletAddress ? `Wallet: ${walletAddress}\n${message}` : message;
+  return walletAddress ? `Wallet: ${formatWalletAddress(walletAddress)}\n${message}` : message;
 }

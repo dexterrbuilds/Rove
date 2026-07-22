@@ -22,6 +22,11 @@ export function formatSolBalance(lamports: number) {
   return (lamports / Number(LAMPORTS_PER_SOL_BIGINT)).toFixed(9).replace(/\.?0+$/, '');
 }
 
+export function formatWalletAddress(address: string) {
+  if (address.length <= 13) return address;
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
+}
+
 export function textResponse(prefix: 'CON' | 'END', message: string) {
   return `${prefix} ${message}`;
 }

@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {formatSolBalance, normalizePhoneNumber, parseSolAmount, textResponse} from './utils.js';
+import {formatSolBalance, formatWalletAddress, normalizePhoneNumber, parseSolAmount, textResponse} from './utils.js';
 
 describe('normalizePhoneNumber', () => {
   it('normalizes safe international formatting', () => {
@@ -30,4 +30,9 @@ describe('parseSolAmount', () => {
 it('formats balances and USSD prefixes', () => {
   expect(formatSolBalance(1_250_000_000)).toBe('1.25');
   expect(textResponse('CON', 'Continue')).toBe('CON Continue');
+});
+
+it('shortens wallet addresses for narrow USSD screens', () => {
+  expect(formatWalletAddress('7YWHMfk9JZe0LMvHL5vRqywaHgQuAW2vTxx2NRwqkL9a')).toBe('7YWHMf...kL9a');
+  expect(formatWalletAddress('short-wallet')).toBe('short-wallet');
 });
