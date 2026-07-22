@@ -3,6 +3,7 @@ import cors from 'cors';
 import {supabase} from './clients.js';
 import {getConfig} from './config.js';
 import {profileRouter} from './profile-routes.js';
+import {paymentRouter} from './payment-routes.js';
 import {ussdRouter} from './ussd.js';
 
 export function createApp() {
@@ -39,6 +40,7 @@ export function createApp() {
     }
   });
   app.use('/profiles', profileRouter);
+  app.use('/payments', paymentRouter);
   app.use(ussdRouter);
   return app;
 }

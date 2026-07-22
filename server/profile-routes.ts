@@ -1,10 +1,11 @@
 import {Router} from 'express';
+import rateLimit from 'express-rate-limit';
 import {z} from 'zod';
 import {privy, supabase} from './clients.js';
 import {getConfig} from './config.js';
 import {hashPin} from './pin-security.js';
 import {attestWalletSecurity, findOwnedSolanaWallet} from './privy-security.js';
-import {normalizePhoneNumber, safeErrorMessage} from './utils.js';
+import {formatWalletAddress, normalizePhoneNumber, safeErrorMessage} from './utils.js';
 
 const registrationSchema = z.object({
   walletAddress: z.string().min(32).max(64),
@@ -27,16 +28,24 @@ profileRouter.use((_request, response, next) => {
   next();
 });
 
-async function authenticate(authorization: string | undefined) {
+export async function authenticateRequest(authorization: string | undefined) {
   const token = authorization?.match(/^Bearer (.+)$/)?.[1];
   if (!token) return null;
   const claims = await privy.utils().auth().verifyAuthToken(token);
   return {token, privyUserId: claims.user_id};
 }
 
+const recipientLookupLimit = rateLimit({
+  windowMs: 5 * 60 * 1_000,
+  limit: 40,
+  standardHeaders: false,
+  legacyHeaders: false,
+  handler: (_request, response) => response.status(429).json({error: 'Too many recipient lookups. Try again later.'}),
+});
+
 profileRouter.get('/me', async (request, response) => {
   try {
-    const auth = await authenticate(request.headers.authorization);
+    const auth = await authenticateRequest(request.headers.authorization);
     if (!auth) return response.status(401).json({error: 'Missing authentication token.'});
     const config = getConfig();
     const {data: profile, error} = await supabase
@@ -111,9 +120,40 @@ profileRouter.get('/me', async (request, response) => {
   }
 });
 
+profileRouter.get('/resolve-recipient', recipientLookupLimit, async (request, response) => {
+  try {
+    const auth = await authenticateRequest(request.headers.authorization);
+    if (!auth) return response.status(401).json({error: 'Missing authentication token.'});
+    const phoneNumber = normalizePhoneNumber(String(request.query.phoneNumber ?? ''));
+    if (!phoneNumber) return response.status(400).json({error: 'Enter a valid international phone number.'});
+
+    const {data: sender, error: senderError} = await supabase.from('profiles')
+      .select('id, phone_number').eq('privy_user_id', auth.privyUserId)
+      .maybeSingle<{id: string; phone_number: string | null}>();
+    if (senderError) throw senderError;
+    if (!sender) return response.status(404).json({error: 'Your Rove profile was not found.'});
+    if (sender.phone_number === phoneNumber) return response.status(400).json({error: 'You cannot send to your own linked phone number.'});
+
+    const {data: recipient, error} = await supabase.from('profiles')
+      .select('display_name, solana_wallet_address').eq('phone_number', phoneNumber)
+      .maybeSingle<{display_name: string | null; solana_wallet_address: string}>();
+    if (error) throw error;
+    if (!recipient) return response.json({registered: false});
+    return response.json({
+      registered: true,
+      displayName: recipient.display_name,
+      walletAddress: recipient.solana_wallet_address,
+      walletPreview: formatWalletAddress(recipient.solana_wallet_address),
+    });
+  } catch (error) {
+    console.error('Recipient resolution failed:', safeErrorMessage(error));
+    return response.status(500).json({error: 'Could not verify this recipient.'});
+  }
+});
+
 profileRouter.post('/register', async (request, response) => {
   try {
-    const auth = await authenticate(request.headers.authorization);
+    const auth = await authenticateRequest(request.headers.authorization);
     if (!auth) return response.status(401).json({error: 'Missing authentication token.'});
     const config = getConfig();
     const input = registrationSchema.parse(request.body);
@@ -189,7 +229,7 @@ profileRouter.post('/register', async (request, response) => {
 // Privy owner. This both replaces the signer configuration and rotates the PIN hash.
 profileRouter.post('/security/upgrade', async (request, response) => {
   try {
-    const auth = await authenticate(request.headers.authorization);
+    const auth = await authenticateRequest(request.headers.authorization);
     if (!auth) return response.status(401).json({error: 'Missing authentication token.'});
     const config = getConfig();
     const input = securityUpgradeSchema.parse(request.body);

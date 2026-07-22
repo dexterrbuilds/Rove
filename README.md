@@ -15,14 +15,20 @@ Rove bridges that gap by making a Solana wallet accessible through a familiar, s
 ## How it works
 
 1. **Create a wallet** — The user signs in with email, Google, or SMS and receives a Privy-powered embedded Solana wallet.
-2. **Link a phone** — The user chooses a four-digit transaction PIN and receives a short-lived activation code.
+2. **Link a phone** — The user chooses a six-digit transaction PIN and receives a short-lived activation code.
 3. **Activate through USSD** — Dialing the Rove shortcode from the registered phone links that number to the wallet.
 4. **Transact offline** — The user can redial the shortcode to check their on-chain balance or send SOL to a registered phone number or any valid Solana address.
 
 ```text
-Web3 Assistant
+Rove Wallet
 1. Check Balance
-2. Send SOL
+2. Receive
+3. Send SOL
+4. Send to Local Bank (Demo)
+5. Buy Airtime (Demo)
+6. Pay Bills (Demo)
+7. Recent Transactions
+8. Exit
 ```
 
 ## MVP capabilities
@@ -31,8 +37,11 @@ Web3 Assistant
 - Automatic self-custodial Solana wallet provisioning
 - Secure phone activation with six-digit, time-limited codes
 - Native SOL balance checks over USSD
-- Phone-number-based SOL transfers
-- Four-digit offline transaction authorization
+- SOL transfers to wallet addresses or verified Rove phone numbers
+- Six-digit offline transaction authorization
+- Isolated demo previews for bank transfers, airtime, and bills
+- Combined on-chain and demo transaction history
+- Replaceable payment-provider interfaces for future integrations
 - Delegated signing for user-approved offline wallet access
 - Protection against duplicate transfers caused by webhook retries
 - PIN attempt lockouts and transaction reconciliation records
@@ -53,7 +62,7 @@ Africa's Talking sends the user's accumulated USSD choices to the API. Rove dete
 
 Rove is designed so sensitive server credentials and PIN hashes never reach the browser.
 
-- Transaction PINs are stored as bcrypt hashes.
+- Transaction PINs are peppered server-side and stored as versioned bcrypt hashes.
 - Phone numbers remain pending until activated from the intended handset.
 - Activation codes expire after 15 minutes and are cleared after use.
 - Wallet ownership is verified against the authenticated Privy user.

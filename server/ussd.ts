@@ -1,14 +1,23 @@
 import {createHash, randomBytes} from 'node:crypto';
 import {Router, type NextFunction, type Request, type Response} from 'express';
 import rateLimit from 'express-rate-limit';
-import {PublicKey, SystemProgram, Transaction} from '@solana/web3.js';
-import {authorizationKeyProvider, privy, solana, supabase} from './clients.js';
+import {PublicKey} from '@solana/web3.js';
+import {solana, supabase} from './clients.js';
 import {getConfig} from './config.js';
 import {createPinMaterial} from './pin-security.js';
+import {
+  DEMO_AIRTIME_NETWORKS,
+  DEMO_BANKS,
+  DEMO_BILL_CATEGORIES,
+  demoBankTransferProvider,
+  getDemoPaymentProvider,
+  onChainTransferProvider,
+  type DemoPaymentKind,
+} from './payment-providers/index.js';
 import {attestWalletSecurity} from './privy-security.js';
 import {authorizeSessionAnswer, hashUssdHistory} from './security-state.js';
 import {isAuthenticUssdCallback} from './ussd-auth.js';
-import {formatSolBalance, formatWalletAddress, parseSolAmount, safeErrorMessage, textResponse, validatePhoneCountry, validateSolanaAddress} from './utils.js';
+import {formatNairaMinor, formatSolBalance, formatWalletAddress, parseNairaAmount, parseSolAmount, safeErrorMessage, textResponse, validatePhoneCountry, validateSolanaAddress} from './utils.js';
 
 type Profile = {
   id: string;
@@ -19,6 +28,7 @@ type Profile = {
   privy_owner_id: string | null;
   pin_hash_version: number | null;
   signer_policy_id: string | null;
+  display_name: string | null;
 };
 
 type UssdSession = {
@@ -26,13 +36,23 @@ type UssdSession = {
   provider_session_id: string;
   phone_number: string;
   profile_id: string | null;
-  current_step: 'activation' | 'menu' | 'recipient' | 'amount' | 'pin' | 'completed';
+  current_step: 'activation' | 'menu' | 'send_recipient_type' | 'recipient' | 'recipient_confirm'
+    | 'amount' | 'pin' | 'demo_bank' | 'demo_account' | 'demo_account_confirm'
+    | 'demo_airtime_network' | 'demo_airtime_phone' | 'demo_bills_category'
+    | 'demo_customer' | 'demo_amount' | 'demo_pin' | 'completed';
   expected_segments: number;
   history_hash: string;
   recipient_profile_id: string | null;
   recipient_phone_number: string | null;
   recipient_wallet_address: string | null;
   amount_lamports: number | string | null;
+  flow_type: 'send_sol' | DemoPaymentKind | null;
+  recipient_kind: 'wallet' | 'phone' | null;
+  demo_provider_key: string | null;
+  demo_subject: string | null;
+  demo_display_name: string | null;
+  demo_amount_minor: number | string | null;
+  demo_metadata: Record<string, string> | null;
   expires_at: string;
   consumed_at: string | null;
 };
@@ -145,7 +165,7 @@ ussdRouter.post('/ussd-blockchain', authenticateUssdCallback, authenticatedUssdR
 async function findLinkedProfile(phoneNumber: string) {
   const {data, error} = await supabase
     .from('profiles')
-    .select('id, solana_wallet_address, phone_number, privy_wallet_id, privy_user_id, privy_owner_id, pin_hash_version, signer_policy_id')
+    .select('id, solana_wallet_address, phone_number, privy_wallet_id, privy_user_id, privy_owner_id, pin_hash_version, signer_policy_id, display_name')
     .eq('phone_number', phoneNumber)
     .maybeSingle<Profile>();
   if (error) throw error;
@@ -198,7 +218,8 @@ function initialSessionPrompt(session: UssdSession, walletAddress?: string) {
     return textResponse('CON', 'Welcome! Enter the 6-digit Activation Code from your Rove dashboard:');
   }
   if (session.current_step === 'menu') {
-    return textResponse('CON', walletMessage(walletAddress, 'Web3 Assistant\n1. Check Balance\n2. Send SOL'));
+    return textResponse('CON', walletMessage(walletAddress,
+      'Rove Wallet\n1. Check Balance\n2. Receive\n3. Send SOL\n4. Send to Local Bank (Demo)\n5. Buy Airtime (Demo)\n6. Pay Bills (Demo)\n7. Recent Transactions\n8. Exit'));
   }
   return textResponse('END', walletMessage(walletAddress, 'A session is already in progress. Continue on your phone or redial after it expires.'));
 }
@@ -223,7 +244,6 @@ async function handleActivationSession(session: UssdSession, activationCode: str
 }
 
 async function handleLinkedSession(profile: Profile, session: UssdSession, answer: string, fullText: string, response: Response) {
-  const config = getConfig();
   const reply = (prefix: 'CON' | 'END', message: string) => response.send(
     textResponse(prefix, walletMessage(profile.solana_wallet_address, message)),
   );
@@ -234,52 +254,107 @@ async function handleLinkedSession(profile: Profile, session: UssdSession, answe
       const balance = await solana.getBalance(new PublicKey(profile.solana_wallet_address), 'confirmed');
       return reply('END', `Your on-chain balance is: ${formatSolBalance(balance)} SOL`);
     }
-    if (answer !== '2') {
+    if (answer === '2') {
       await consumeSession(session.id);
-      return reply('END', 'Error: Invalid menu selection.');
+      return reply('END', `Receive SOL at:\n${profile.solana_wallet_address}`);
     }
-    const advanced = await advanceSession(session, 'recipient', 1, fullText, {});
-    return advanced ? reply('CON', 'Enter recipient phone number or Solana wallet address:') : reply('END', 'Error: Session expired. Redial to start again.');
+    if (answer === '3') {
+      const advanced = await advanceSession(session, 'send_recipient_type', 1, fullText, {flow_type: 'send_sol'});
+      return advanced ? reply('CON', 'Send to:\n1. Wallet Address\n2. Registered Phone Number') : reply('END', 'Error: Session expired.');
+    }
+    if (answer === '4') {
+      const advanced = await advanceSession(session, 'demo_bank', 1, fullText, {flow_type: 'bank_transfer'});
+      return advanced ? reply('CON', `Choose Bank (Demo)\n${numberedOptions(DEMO_BANKS)}`) : reply('END', 'Error: Session expired.');
+    }
+    if (answer === '5') {
+      const advanced = await advanceSession(session, 'demo_airtime_network', 1, fullText, {flow_type: 'airtime'});
+      return advanced ? reply('CON', `Choose Network (Demo)\n${numberedOptions(DEMO_AIRTIME_NETWORKS)}`) : reply('END', 'Error: Session expired.');
+    }
+    if (answer === '6') {
+      const advanced = await advanceSession(session, 'demo_bills_category', 1, fullText, {flow_type: 'bill_payment'});
+      return advanced ? reply('CON', `Bill Category (Demo)\n${numberedOptions(DEMO_BILL_CATEGORIES)}`) : reply('END', 'Error: Session expired.');
+    }
+    if (answer === '7') {
+      await consumeSession(session.id);
+      return reply('END', await recentTransactionsMessage(profile.id));
+    }
+    await consumeSession(session.id);
+    return answer === '8' ? reply('END', 'Thanks for using Rove.') : reply('END', 'Error: Invalid menu selection.');
+  }
+
+  if (['send_recipient_type', 'recipient', 'recipient_confirm', 'amount', 'pin'].includes(session.current_step)) {
+    return handleSolSendFlow(profile, session, answer, fullText, response);
+  }
+  if (session.current_step.startsWith('demo_')) {
+    return handleDemoPaymentFlow(profile, session, answer, fullText, response);
+  }
+  await consumeSession(session.id);
+  return reply('END', 'Error: Invalid session state. Redial to start again.');
+}
+
+async function handleSolSendFlow(profile: Profile, session: UssdSession, answer: string, fullText: string, response: Response) {
+  const config = getConfig();
+  const reply = (prefix: 'CON' | 'END', message: string) => response.send(textResponse(prefix, walletMessage(profile.solana_wallet_address, message)));
+
+  if (session.current_step === 'send_recipient_type') {
+    if (answer !== '1' && answer !== '2') {
+      await consumeSession(session.id);
+      return reply('END', 'Error: Select Wallet Address or Registered Phone Number.');
+    }
+    const recipientKind = answer === '1' ? 'wallet' : 'phone';
+    const advanced = await advanceSession(session, 'recipient', 2, fullText, {recipient_kind: recipientKind});
+    return advanced
+      ? reply('CON', recipientKind === 'wallet' ? 'Enter Solana Wallet Address:' : 'Enter Registered Phone Number:')
+      : reply('END', 'Error: Session expired.');
   }
 
   if (session.current_step === 'recipient') {
-    const recipientPhone = validatePhoneCountry(answer, config.africasTalkingAllowedCountryCodes);
-    let recipientProfileId: string | null = null;
-    let recipientPhoneNumber: string | null = null;
-    let recipientWalletAddress: string | null = null;
-    if (recipientPhone) {
-      if (recipientPhone.phoneNumber === profile.phone_number) {
+    if (session.recipient_kind === 'wallet') {
+      const address = validateSolanaAddress(answer);
+      if (!address || address === profile.solana_wallet_address) {
         await consumeSession(session.id);
-        return reply('END', 'Error: You cannot send to your own linked phone number.');
+        return reply('END', 'Error: Invalid recipient wallet address.');
       }
-      const recipient = await findLinkedProfile(recipientPhone.phoneNumber);
+      const advanced = await advanceSession(session, 'amount', 3, fullText, {
+        recipient_profile_id: null,
+        recipient_phone_number: null,
+        recipient_wallet_address: address,
+      });
+      return advanced ? reply('CON', `To: ${formatWalletAddress(address)}\nEnter amount (SOL):`) : reply('END', 'Error: Session expired.');
+    }
+    if (session.recipient_kind === 'phone') {
+      const phone = validatePhoneCountry(answer, config.africasTalkingAllowedCountryCodes);
+      if (!phone || phone.phoneNumber === profile.phone_number) {
+        await consumeSession(session.id);
+        return reply('END', 'Error: Enter a valid registered recipient phone number.');
+      }
+      const recipient = await findLinkedProfile(phone.phoneNumber);
       if (!recipient) {
         await consumeSession(session.id);
-        return reply('END', 'Error: Recipient phone number is not registered. Enter a Solana address instead.');
+        return reply('END', 'This phone number is not registered with Rove.');
       }
-      recipientProfileId = recipient.id;
-      recipientPhoneNumber = recipientPhone.phoneNumber;
-      recipientWalletAddress = recipient.solana_wallet_address;
-    } else {
-      recipientWalletAddress = validateSolanaAddress(answer);
-      if (!recipientWalletAddress) {
-        await consumeSession(session.id);
-        return reply('END', 'Error: Enter a valid phone number or Solana wallet address.');
-      }
-      if (recipientWalletAddress === profile.solana_wallet_address) {
-        await consumeSession(session.id);
-        return reply('END', 'Error: You cannot send to your own wallet address.');
-      }
+      const advanced = await advanceSession(session, 'recipient_confirm', 3, fullText, {
+        recipient_profile_id: recipient.id,
+        recipient_phone_number: phone.phoneNumber,
+        recipient_wallet_address: recipient.solana_wallet_address,
+        demo_display_name: recipient.display_name,
+      });
+      const name = recipient.display_name ?? 'Rove User';
+      return advanced
+        ? reply('CON', `Verified Rove User\n${name}\nWallet: ${formatWalletAddress(recipient.solana_wallet_address)}\n1. Confirm\n2. Cancel`)
+        : reply('END', 'Error: Session expired.');
     }
-    const advanced = await advanceSession(session, 'amount', 2, fullText, {
-      recipient_profile_id: recipientProfileId,
-      recipient_phone_number: recipientPhoneNumber,
-      recipient_wallet_address: recipientWalletAddress,
-    });
-    const recipientLabel = recipientPhoneNumber ?? formatWalletAddress(recipientWalletAddress);
-    return advanced
-      ? reply('CON', `To: ${recipientLabel}\nEnter amount to transfer (SOL):`)
-      : reply('END', 'Error: Session expired. Redial to start again.');
+    await consumeSession(session.id);
+    return reply('END', 'Error: Recipient type is missing.');
+  }
+
+  if (session.current_step === 'recipient_confirm') {
+    if (answer !== '1') {
+      await consumeSession(session.id);
+      return reply('END', answer === '2' ? 'Transfer cancelled.' : 'Error: Invalid confirmation.');
+    }
+    const advanced = await advanceSession(session, 'amount', 4, fullText, {});
+    return advanced ? reply('CON', 'Enter amount to transfer (SOL):') : reply('END', 'Error: Session expired.');
   }
 
   if (session.current_step === 'amount') {
@@ -288,60 +363,132 @@ async function handleLinkedSession(profile: Profile, session: UssdSession, answe
       await consumeSession(session.id);
       return reply('END', `Error: Enter an amount up to ${config.maxTransferSol} SOL.`);
     }
-    const advanced = await advanceSession(session, 'pin', 3, fullText, {amount_lamports: lamports.toString()});
-    const recipientLabel = session.recipient_phone_number
-      ?? (session.recipient_wallet_address ? formatWalletAddress(session.recipient_wallet_address) : 'recipient');
+    const advanced = await advanceSession(session, 'pin', session.expected_segments + 1, fullText, {amount_lamports: lamports.toString()});
+    const recipientLabel = session.recipient_phone_number ?? formatWalletAddress(session.recipient_wallet_address ?? '');
     return advanced
-      ? reply('CON', `Send ${answer} SOL to ${recipientLabel}\nEnter your 6-Digit PIN to authorize:`)
-      : reply('END', 'Error: Session expired. Redial to start again.');
+      ? reply('CON', `Send ${answer} SOL to ${recipientLabel}\nEnter your 6-Digit PIN:`)
+      : reply('END', 'Error: Session expired.');
   }
 
   if (session.current_step !== 'pin' || !/^\d{6}$/.test(answer)) {
     await consumeSession(session.id);
     return reply('END', 'Error: Invalid Security PIN.');
   }
+  const pinCheck = await verifyProfilePin(profile, answer);
+  if (!pinCheck.ok) {
+    await consumeSession(session.id);
+    return reply('END', pinCheck.message);
+  }
+  return executeAuthorizedSolTransfer(profile, session, reply);
+}
+
+async function handleDemoPaymentFlow(profile: Profile, session: UssdSession, answer: string, fullText: string, response: Response) {
+  const config = getConfig();
+  const reply = (prefix: 'CON' | 'END', message: string) => response.send(textResponse(prefix, walletMessage(profile.solana_wallet_address, message)));
+
+  if (session.current_step === 'demo_bank') {
+    const bank = optionFromAnswer(answer, DEMO_BANKS);
+    if (!bank) return endInvalidSession(session, reply, 'Error: Invalid bank selection.');
+    const advanced = await advanceSession(session, 'demo_account', 2, fullText, {demo_provider_key: bank.key, demo_metadata: {bankName: bank.label}});
+    return advanced ? reply('CON', `Enter 10-digit ${bank.label} account number:`) : reply('END', 'Error: Session expired.');
+  }
+  if (session.current_step === 'demo_account') {
+    const resolved = demoBankTransferProvider.resolveAccount(session.demo_provider_key ?? '', answer);
+    if (!resolved) return endInvalidSession(session, reply, 'Error: Enter a valid 10-digit account number.');
+    const advanced = await advanceSession(session, 'demo_account_confirm', 3, fullText, {
+      demo_subject: resolved.accountNumber,
+      demo_display_name: resolved.accountName,
+      demo_metadata: {bankName: resolved.bankName},
+    });
+    return advanced
+      ? reply('CON', `${resolved.bankName}\n${resolved.accountName}\nAccount: ******${resolved.accountNumber.slice(-4)}\n1. Continue\n2. Cancel`)
+      : reply('END', 'Error: Session expired.');
+  }
+  if (session.current_step === 'demo_account_confirm') {
+    if (answer !== '1') return endInvalidSession(session, reply, answer === '2' ? 'Demo payment cancelled.' : 'Error: Invalid confirmation.');
+    const advanced = await advanceSession(session, 'demo_amount', 4, fullText, {});
+    return advanced ? reply('CON', 'Enter demo amount (NGN):') : reply('END', 'Error: Session expired.');
+  }
+  if (session.current_step === 'demo_airtime_network') {
+    const network = optionFromAnswer(answer, DEMO_AIRTIME_NETWORKS);
+    if (!network) return endInvalidSession(session, reply, 'Error: Invalid network selection.');
+    const advanced = await advanceSession(session, 'demo_airtime_phone', 2, fullText, {demo_provider_key: network.key, demo_display_name: network.label});
+    return advanced ? reply('CON', `Enter ${network.label} phone number:`) : reply('END', 'Error: Session expired.');
+  }
+  if (session.current_step === 'demo_airtime_phone') {
+    const phone = validatePhoneCountry(answer, config.africasTalkingAllowedCountryCodes);
+    if (!phone) return endInvalidSession(session, reply, 'Error: Enter a valid international phone number.');
+    const advanced = await advanceSession(session, 'demo_amount', 3, fullText, {demo_subject: phone.phoneNumber});
+    return advanced ? reply('CON', `Airtime to ${phone.phoneNumber}\nEnter demo amount (NGN):`) : reply('END', 'Error: Session expired.');
+  }
+  if (session.current_step === 'demo_bills_category') {
+    const category = optionFromAnswer(answer, DEMO_BILL_CATEGORIES);
+    if (!category) return endInvalidSession(session, reply, 'Error: Invalid bill category.');
+    const advanced = await advanceSession(session, 'demo_customer', 2, fullText, {demo_provider_key: category.key, demo_display_name: category.label});
+    return advanced ? reply('CON', `Enter ${category.label} Customer ID:`) : reply('END', 'Error: Session expired.');
+  }
+  if (session.current_step === 'demo_customer') {
+    if (!/^[A-Za-z0-9-]{4,32}$/.test(answer)) return endInvalidSession(session, reply, 'Error: Invalid Customer ID.');
+    const advanced = await advanceSession(session, 'demo_amount', 3, fullText, {demo_subject: answer});
+    return advanced ? reply('CON', `${session.demo_display_name} payment\nEnter demo amount (NGN):`) : reply('END', 'Error: Session expired.');
+  }
+  if (session.current_step === 'demo_amount') {
+    const amountMinor = parseNairaAmount(answer);
+    if (!amountMinor) return endInvalidSession(session, reply, 'Error: Enter a demo amount up to NGN 1,000,000.');
+    const advanced = await advanceSession(session, 'demo_pin', session.expected_segments + 1, fullText, {demo_amount_minor: amountMinor.toString()});
+    return advanced
+      ? reply('CON', `${formatNairaMinor(amountMinor)} (Demo)\nEnter your 6-Digit PIN:`)
+      : reply('END', 'Error: Session expired.');
+  }
+  if (session.current_step !== 'demo_pin' || !/^\d{6}$/.test(answer)) return endInvalidSession(session, reply, 'Error: Invalid Security PIN.');
+  const pinCheck = await verifyProfilePin(profile, answer);
+  if (!pinCheck.ok) return endInvalidSession(session, reply, pinCheck.message);
+  return executeAuthorizedDemoPayment(profile, session, reply);
+}
+
+async function verifyProfilePin(profile: Profile, pin: string): Promise<{ok: true} | {ok: false; message: string}> {
+  const config = getConfig();
   if (!profile.privy_wallet_id || !profile.privy_user_id || !profile.privy_owner_id
       || profile.pin_hash_version !== config.pinHashVersion
       || profile.signer_policy_id !== config.privyPolicyId) {
-    await consumeSession(session.id);
-    return reply('END', 'Security upgrade required. Sign in to the Rove dashboard before transacting.');
+    return {ok: false, message: 'Security upgrade required. Sign in to the Rove dashboard before transacting.'};
   }
-
-  const pinMaterial = createPinMaterial(answer, config.pinPepper);
-  const {data: pinResult, error: pinError} = await supabase.rpc('verify_and_record_pin_attempt', {
+  const pinMaterial = createPinMaterial(pin, config.pinPepper);
+  const {data, error} = await supabase.rpc('verify_and_record_pin_attempt', {
     p_profile_id: profile.id,
     p_pin_material: pinMaterial,
     p_required_hash_version: config.pinHashVersion,
     p_max_failures: config.pinMaxFailures,
     p_lock_seconds: config.pinLockSeconds,
   });
-  if (pinError || !Array.isArray(pinResult) || !pinResult[0]) {
-    throw pinError ?? new Error('PIN verification failed closed.');
-  }
-  const result = pinResult[0] as {verified: boolean; locked_until: string | null; upgrade_required: boolean};
-  if (!result.verified) {
-    await consumeSession(session.id);
-    if (result.upgrade_required) return reply('END', 'Security upgrade required. Sign in to the Rove dashboard.');
-    if (result.locked_until) return reply('END', 'Error: Too many PIN attempts. Try again later.');
-    return reply('END', 'Error: Invalid Security PIN.');
-  }
+  if (error || !Array.isArray(data) || !data[0]) throw error ?? new Error('PIN verification failed closed.');
+  const result = data[0] as {verified: boolean; locked_until: string | null; upgrade_required: boolean};
+  if (result.verified) return {ok: true};
+  if (result.upgrade_required) return {ok: false, message: 'Security upgrade required. Sign in to the Rove dashboard.'};
+  if (result.locked_until) return {ok: false, message: 'Error: Too many PIN attempts. Try again later.'};
+  return {ok: false, message: 'Error: Invalid Security PIN.'};
+}
 
-  const amountLamports = BigInt(String(session.amount_lamports));
+async function executeAuthorizedSolTransfer(
+  profile: Profile,
+  session: UssdSession,
+  reply: (prefix: 'CON' | 'END', message: string) => Response,
+) {
+  const config = getConfig();
   const recipientWalletAddress = validateSolanaAddress(session.recipient_wallet_address ?? '');
+  const amountLamports = session.amount_lamports ? BigInt(String(session.amount_lamports)) : 0n;
   if (!recipientWalletAddress || amountLamports <= 0n
       || Boolean(session.recipient_profile_id) !== Boolean(session.recipient_phone_number)) {
     await consumeSession(session.id);
     return reply('END', 'Error: Incomplete transaction session.');
   }
   if (session.recipient_profile_id && session.recipient_phone_number) {
-    const {data: recipient, error: recipientError} = await supabase
-      .from('profiles')
-      .select('id')
+    const {data: recipient, error} = await supabase.from('profiles').select('id')
       .eq('id', session.recipient_profile_id)
       .eq('phone_number', session.recipient_phone_number)
       .eq('solana_wallet_address', recipientWalletAddress)
       .maybeSingle<{id: string}>();
-    if (recipientError) throw recipientError;
+    if (error) throw error;
     if (!recipient) {
       await consumeSession(session.id);
       return reply('END', 'Error: Recipient profile changed. Redial and verify the destination.');
@@ -349,17 +496,14 @@ async function handleLinkedSession(profile: Profile, session: UssdSession, answe
   }
 
   await attestWalletSecurity({
-    walletId: profile.privy_wallet_id,
+    walletId: profile.privy_wallet_id!,
     walletAddress: profile.solana_wallet_address,
-    privyUserId: profile.privy_user_id,
-    ownerId: profile.privy_owner_id,
+    privyUserId: profile.privy_user_id!,
+    ownerId: profile.privy_owner_id!,
   });
 
   const nonce = randomBytes(32).toString('hex');
-  const authorizationExpiry = new Date(Math.min(
-    Date.now() + config.transactionAuthTtlSeconds * 1_000,
-    new Date(session.expires_at).getTime(),
-  )).toISOString();
+  const authorizationExpiry = authorizationExpiryForSession(session, config.transactionAuthTtlSeconds);
   const {error: authInsertError} = await supabase.from('transaction_authorizations').insert({
     nonce,
     session_id: session.id,
@@ -380,9 +524,7 @@ async function handleLinkedSession(profile: Profile, session: UssdSession, answe
     p_amount_lamports: amountLamports.toString(),
   });
   const authorizationId = Array.isArray(consumedAuth) ? consumedAuth[0]?.authorization_id as string | undefined : undefined;
-  if (consumeError || !authorizationId) {
-    return reply('END', 'Error: Transaction authorization expired or was already used.');
-  }
+  if (consumeError || !authorizationId) return reply('END', 'Error: Transaction authorization expired or was already used.');
 
   const referenceId = createHash('sha256').update(nonce).digest('hex').slice(0, 48);
   const {data: reservation, error: reservationError} = await supabase.from('ussd_transfers').insert({
@@ -399,13 +541,14 @@ async function handleLinkedSession(profile: Profile, session: UssdSession, answe
   if (reservationError || !reservation) throw reservationError ?? new Error('Could not reserve transfer.');
 
   try {
-    const signature = await sendSolTransfer({
-      walletId: profile.privy_wallet_id,
+    const payment = await onChainTransferProvider.execute({
+      walletId: profile.privy_wallet_id!,
       fromAddress: profile.solana_wallet_address,
       toAddress: recipientWalletAddress,
       lamports: amountLamports,
       referenceId,
     });
+    const signature = payment.reference;
     const {error: persistenceError} = await supabase.from('ussd_transfers')
       .update({status: 'confirmed', signature}).eq('id', reservation.id);
     if (persistenceError) console.error('Could not persist confirmed transfer:', safeErrorMessage(persistenceError));
@@ -413,11 +556,147 @@ async function handleLinkedSession(profile: Profile, session: UssdSession, answe
     return reply('END', transferSuccessMessage(formatLamportsForReceipt(amountLamports), recipientLabel, signature));
   } catch (error) {
     await supabase.from('ussd_transfers')
-      .update({status: 'unknown', error_message: safeErrorMessage(error).slice(0, 500)})
-      .eq('id', reservation.id);
+      .update({status: 'unknown', error_message: safeErrorMessage(error).slice(0, 500)}).eq('id', reservation.id);
     console.error('Solana transfer failed:', safeErrorMessage(error));
     return reply('END', 'Error: Transfer status is uncertain. Do not retry; check your wallet.');
   }
+}
+
+async function executeAuthorizedDemoPayment(
+  profile: Profile,
+  session: UssdSession,
+  reply: (prefix: 'CON' | 'END', message: string) => Response,
+) {
+  const kind = session.flow_type;
+  const amountMinor = session.demo_amount_minor ? BigInt(String(session.demo_amount_minor)) : 0n;
+  if (!kind || kind === 'send_sol' || !session.demo_provider_key || !session.demo_subject || amountMinor <= 0n) {
+    await consumeSession(session.id);
+    return reply('END', 'Error: Incomplete demo payment session.');
+  }
+  const nonce = randomBytes(32).toString('hex');
+  const config = getConfig();
+  const {error: insertError} = await supabase.from('demo_payment_authorizations').insert({
+    nonce,
+    session_id: session.id,
+    profile_id: profile.id,
+    payment_kind: kind,
+    amount_minor: amountMinor.toString(),
+    expires_at: authorizationExpiryForSession(session, config.transactionAuthTtlSeconds),
+  });
+  if (insertError) throw insertError;
+  const {data, error} = await supabase.rpc('consume_demo_payment_authorization', {
+    p_nonce: nonce,
+    p_session_id: session.id,
+    p_profile_id: profile.id,
+    p_payment_kind: kind,
+    p_amount_minor: amountMinor.toString(),
+  });
+  const authorizationId = Array.isArray(data) ? data[0]?.authorization_id as string | undefined : undefined;
+  if (error || !authorizationId) return reply('END', 'Error: Demo authorization expired or was already used.');
+
+  const details = demoPaymentDetails(session, kind);
+  try {
+    const payment = await getDemoPaymentProvider(kind).execute({
+      profileId: profile.id,
+      sessionId: session.id,
+      amountMinor,
+      currency: 'NGN',
+      channel: 'ussd',
+      details,
+    });
+    const {error: persistenceError} = await supabase.from('demo_transactions').insert({
+      session_id: session.id,
+      authorization_id: authorizationId,
+      profile_id: profile.id,
+      payment_kind: kind,
+      provider_key: session.demo_provider_key,
+      channel: 'ussd',
+      description: payment.description,
+      amount_minor: amountMinor.toString(),
+      currency: 'NGN',
+      reference: payment.reference,
+      status: 'completed',
+      processing_time: payment.processingTime,
+      receipt: payment.receipt,
+      completed_at: new Date().toISOString(),
+    });
+    if (persistenceError) throw persistenceError;
+    return reply('END', `Demo Successful\n${payment.description}\n${formatNairaMinor(amountMinor)}\nRef: ${payment.reference}\n${payment.processingTime}`);
+  } catch (error) {
+    const failureReference = `RVE-FAIL-${createHash('sha256').update(nonce).digest('hex').slice(0, 16).toUpperCase()}`;
+    await supabase.from('demo_transactions').insert({
+      session_id: session.id,
+      authorization_id: authorizationId,
+      profile_id: profile.id,
+      payment_kind: kind,
+      provider_key: session.demo_provider_key,
+      channel: 'ussd',
+      description: `Demo ${kind.replaceAll('_', ' ')} failed`,
+      amount_minor: amountMinor.toString(),
+      currency: 'NGN',
+      reference: failureReference,
+      status: 'failed',
+      processing_time: 'Not processed',
+      receipt: {status: 'Demo Failed'},
+      completed_at: new Date().toISOString(),
+    });
+    console.error('Demo payment failed:', safeErrorMessage(error));
+    return reply('END', `Demo payment failed. Ref: ${failureReference}`);
+  }
+}
+
+function demoPaymentDetails(session: UssdSession, kind: DemoPaymentKind): Record<string, string> {
+  if (kind === 'bank_transfer') return {
+    bankKey: session.demo_provider_key!, accountNumber: session.demo_subject!, accountName: session.demo_display_name ?? '',
+  };
+  if (kind === 'airtime') return {networkKey: session.demo_provider_key!, phoneNumber: session.demo_subject!};
+  return {categoryKey: session.demo_provider_key!, customerId: session.demo_subject!};
+}
+
+async function recentTransactionsMessage(profileId: string) {
+  const [chainResult, demoResult] = await Promise.all([
+    supabase.from('ussd_transfers')
+      .select('amount_lamports, status, recipient_phone_number, recipient_wallet_address, created_at')
+      .eq('sender_profile_id', profileId).order('created_at', {ascending: false}).limit(4),
+    supabase.from('demo_transactions')
+      .select('description, amount_minor, status, created_at')
+      .eq('profile_id', profileId).order('created_at', {ascending: false}).limit(4),
+  ]);
+  if (chainResult.error) throw chainResult.error;
+  if (demoResult.error) throw demoResult.error;
+  type HistoryEntry = {timestamp: number; text: string};
+  const chainEntries: HistoryEntry[] = (chainResult.data ?? []).map((item) => ({
+    timestamp: new Date(item.created_at).getTime(),
+    text: `On-chain -${formatLamportsForReceipt(BigInt(String(item.amount_lamports)))} SOL ${item.status}`,
+  }));
+  const demoEntries: HistoryEntry[] = (demoResult.data ?? []).map((item) => ({
+    timestamp: new Date(item.created_at).getTime(),
+    text: `Demo -${formatNairaMinor(BigInt(String(item.amount_minor)))} ${item.status}`,
+  }));
+  const entries = [...chainEntries, ...demoEntries].sort((first, second) => second.timestamp - first.timestamp).slice(0, 4);
+  return entries.length ? `Recent Transactions\n${entries.map((entry, index) => `${index + 1}. ${entry.text}`).join('\n')}` : 'No recent transactions.';
+}
+
+function numberedOptions(options: ReadonlyArray<{label: string}>) {
+  return options.map((option, index) => `${index + 1}. ${option.label}`).join('\n');
+}
+
+function optionFromAnswer<T extends {key: string; label: string}>(answer: string, options: readonly T[]) {
+  const index = Number(answer) - 1;
+  return Number.isInteger(index) && index >= 0 ? options[index] ?? null : null;
+}
+
+async function endInvalidSession(
+  session: UssdSession,
+  reply: (prefix: 'CON' | 'END', message: string) => Response,
+  message: string,
+) {
+  await consumeSession(session.id);
+  return reply('END', message);
+}
+
+function authorizationExpiryForSession(session: UssdSession, ttlSeconds: number) {
+  return new Date(Math.min(Date.now() + ttlSeconds * 1_000, new Date(session.expires_at).getTime())).toISOString();
 }
 
 async function advanceSession(
@@ -425,7 +704,7 @@ async function advanceSession(
   nextStep: UssdSession['current_step'],
   expectedSegments: number,
   fullText: string,
-  values: Record<string, string | null>,
+  values: Record<string, unknown>,
 ) {
   const {data, error} = await supabase.from('ussd_sessions').update({
     current_step: nextStep,
@@ -448,32 +727,6 @@ async function consumeSession(sessionId: string) {
     .eq('id', sessionId)
     .is('consumed_at', null);
   if (error) throw error;
-}
-
-async function sendSolTransfer(input: {
-  walletId: string;
-  fromAddress: string;
-  toAddress: string;
-  lamports: bigint;
-  referenceId: string;
-}) {
-  const config = getConfig();
-  const sender = new PublicKey(input.fromAddress);
-  const recipient = new PublicKey(input.toAddress);
-  const {blockhash} = await solana.getLatestBlockhash('confirmed');
-  const transaction = new Transaction({feePayer: sender, recentBlockhash: blockhash}).add(
-    SystemProgram.transfer({fromPubkey: sender, toPubkey: recipient, lamports: Number(input.lamports)}),
-  );
-  const unsignedTransaction = transaction.serialize({requireAllSignatures: false, verifySignatures: false});
-  const authorizationPrivateKeys = await authorizationKeyProvider.getAuthorizationPrivateKeys();
-  const result = await privy.wallets().solana().signAndSendTransaction(input.walletId, {
-    caip2: config.solanaCaip2,
-    transaction: unsignedTransaction,
-    authorization_context: {authorization_private_keys: authorizationPrivateKeys},
-    idempotency_key: input.referenceId,
-    reference_id: input.referenceId,
-  });
-  return result.hash;
 }
 
 function formatLamportsForReceipt(lamports: bigint) {

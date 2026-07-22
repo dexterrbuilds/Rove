@@ -27,6 +27,22 @@ describe('authoritative USSD sessions', () => {
     expect(authorizeSessionAnswer(session, {...input, text: '2*recipient*amount'})).toBeNull();
     expect(authorizeSessionAnswer(session, {...input, text: '1*answer'})).toBeNull();
   });
+
+  it('authorizes long multi-step flows only at the exact next segment', () => {
+    const longSession = {
+      ...session,
+      expected_segments: 5,
+      history_hash: hashUssdHistory('4*1*0123456789*1*2500'),
+    };
+    expect(authorizeSessionAnswer(longSession, {
+      providerSessionId: 'session-1', phoneNumber: session.phone_number,
+      text: '4*1*0123456789*1*2500*123456', now,
+    })).toBe('123456');
+    expect(authorizeSessionAnswer(longSession, {
+      providerSessionId: 'session-1', phoneNumber: session.phone_number,
+      text: '4*1*0123456789*1*2500*123456*replay', now,
+    })).toBeNull();
+  });
 });
 
 it('rejects transaction authorization replay and binding changes', () => {

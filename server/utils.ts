@@ -43,6 +43,20 @@ export function parseSolAmount(value: string, configuredMaximumSol?: string) {
   return lamports;
 }
 
+export function parseNairaAmount(value: string, maximumNaira = 1_000_000) {
+  if (!/^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(value)) return null;
+  const [whole, fraction = ''] = value.split('.');
+  const minor = BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0'));
+  const maximumMinor = BigInt(maximumNaira) * 100n;
+  return minor > 0n && minor <= maximumMinor ? minor : null;
+}
+
+export function formatNairaMinor(amountMinor: bigint) {
+  const whole = amountMinor / 100n;
+  const fraction = (amountMinor % 100n).toString().padStart(2, '0');
+  return `NGN ${whole.toLocaleString('en-US')}.${fraction}`;
+}
+
 export function formatSolBalance(lamports: number) {
   return (lamports / Number(LAMPORTS_PER_SOL_BIGINT)).toFixed(9).replace(/\.?0+$/, '');
 }

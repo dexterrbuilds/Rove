@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import {Keypair} from '@solana/web3.js';
-import {formatSolBalance, formatWalletAddress, normalizePhoneNumber, parseSolAmount, redactSensitive, textResponse, validatePhoneCountry, validateSolanaAddress} from './utils.js';
+import {formatNairaMinor, formatSolBalance, formatWalletAddress, normalizePhoneNumber, parseNairaAmount, parseSolAmount, redactSensitive, textResponse, validatePhoneCountry, validateSolanaAddress} from './utils.js';
 
 describe('normalizePhoneNumber', () => {
   it('normalizes safe international formatting', () => {
@@ -42,6 +42,20 @@ describe('parseSolAmount', () => {
     expect(parseSolAmount('1.0000000001')).toBeNull();
     expect(parseSolAmount('-1')).toBeNull();
     expect(parseSolAmount('1001')).toBeNull();
+  });
+});
+
+describe('parseNairaAmount', () => {
+  it('converts demo fiat amounts to exact minor units', () => {
+    expect(parseNairaAmount('2500')).toBe(250_000n);
+    expect(parseNairaAmount('2500.50')).toBe(250_050n);
+    expect(formatNairaMinor(250_050n)).toBe('NGN 2,500.50');
+  });
+
+  it('rejects zero, excess precision, and amounts above the demo limit', () => {
+    expect(parseNairaAmount('0')).toBeNull();
+    expect(parseNairaAmount('10.001')).toBeNull();
+    expect(parseNairaAmount('1000001')).toBeNull();
   });
 });
 

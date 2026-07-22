@@ -123,4 +123,41 @@ describe.skipIf(!run)('security database concurrency', () => {
       await database!.from('profiles').delete().eq('id', senderId);
     }
   });
+
+  it('atomically permits only one demo payment authorization consumer', async () => {
+    const profileId = randomUUID();
+    const providerSessionId = `demo-security-test-${randomUUID()}`;
+    const phone = '+2348012345678';
+    await database!.from('profiles').insert({
+      id: profileId, solana_wallet_address: Keypair.generate().publicKey.toBase58(), phone_number: phone,
+    }).throwOnError();
+    const {data: session} = await database!.from('ussd_sessions').insert({
+      provider_session_id: providerSessionId,
+      phone_number: phone,
+      profile_id: profileId,
+      service_code: '*384*1234#', network_code: 'TEST', country_code: 'NG',
+      current_step: 'demo_pin', expected_segments: 5, history_hash: 'c'.repeat(64),
+      flow_type: 'bank_transfer', demo_provider_key: 'access', demo_subject: '0123456789',
+      demo_amount_minor: 250000, expires_at: new Date(Date.now() + 60_000).toISOString(),
+    }).select('id').single<{id: string}>();
+    const nonce = randomUUID().replaceAll('-', '').padEnd(64, 'c');
+    await database!.from('demo_payment_authorizations').insert({
+      nonce, session_id: session!.id, profile_id: profileId,
+      payment_kind: 'bank_transfer', amount_minor: 250000,
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+    }).throwOnError();
+
+    try {
+      const consume = () => database!.rpc('consume_demo_payment_authorization', {
+        p_nonce: nonce, p_session_id: session!.id, p_profile_id: profileId,
+        p_payment_kind: 'bank_transfer', p_amount_minor: 250000,
+      });
+      const results = await Promise.all([consume(), consume()]);
+      expect(results.filter((result) => Array.isArray(result.data) && result.data.length === 1)).toHaveLength(1);
+    } finally {
+      await database!.from('demo_payment_authorizations').delete().eq('session_id', session!.id);
+      await database!.from('ussd_sessions').delete().eq('id', session!.id);
+      await database!.from('profiles').delete().eq('id', profileId);
+    }
+  });
 });

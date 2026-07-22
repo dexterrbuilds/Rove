@@ -1,9 +1,10 @@
 'use client';
 
-import {useMemo, useState} from 'react';
+import {useEffect, useMemo, useState} from 'react';
 import {AnimatePresence, motion} from 'framer-motion';
 import {QRCodeSVG} from 'qrcode.react';
 import {PublicKey} from '@solana/web3.js';
+import {getAccessToken} from '@privy-io/react-auth';
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -15,6 +16,7 @@ import {
   EyeOff,
   KeyRound,
   LockKeyhole,
+  Landmark,
   Phone,
   QrCode,
   RefreshCw,
@@ -22,10 +24,14 @@ import {
   Share2,
   ShieldCheck,
   Smartphone,
+  ReceiptText,
   WalletCards,
   WifiOff,
+  Zap,
 } from 'lucide-react';
 import type {DashboardView, WalletActivity, WalletAsset} from '@/lib/dashboard-types';
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
 const cardMotion = {
   initial: {opacity: 0, y: 12},
@@ -208,12 +214,19 @@ export function TokenList({assets, loading}: {assets: WalletAsset[]; loading: bo
   );
 }
 
-function activityLabel(activity: WalletActivity) {
-  if (activity.status === 'pending') return 'Pending';
-  if (activity.status === 'failed') return 'Failed';
-  if (activity.source === 'ussd') return 'Sent via USSD';
-  if (activity.source === 'dashboard') return 'Sent via Dashboard';
-  return activity.direction === 'received' ? 'Received' : 'Sent on-chain';
+function activityBadges(activity: WalletActivity) {
+  const badges: Array<{label: string; tone: string}> = [];
+  if (activity.activityType === 'demo' || activity.source === 'demo') {
+    badges.push({label: 'Demo', tone: 'demo'});
+  } else {
+    badges.push({label: 'On-chain', tone: 'onchain'});
+    if (activity.source === 'ussd') badges.push({label: 'USSD', tone: 'ussd'});
+    else if (activity.source === 'dashboard') badges.push({label: 'Dashboard', tone: 'dashboard'});
+    else badges.push({label: activity.direction === 'received' ? 'Received' : 'Sent', tone: activity.direction});
+  }
+  if (activity.status === 'pending') badges.push({label: 'Pending', tone: 'pending'});
+  if (activity.status === 'failed') badges.push({label: 'Failed', tone: 'failed'});
+  return badges;
 }
 
 function explorerTransactionUrl(signature: string, cluster: string) {
@@ -223,27 +236,37 @@ function explorerTransactionUrl(signature: string, cluster: string) {
 
 export function TransactionCard({activity, cluster}: {activity: WalletActivity; cluster: string}) {
   const received = activity.direction === 'received';
+  const demo = activity.activityType === 'demo' || activity.source === 'demo';
+  const amount = activity.amount === null
+    ? '—'
+    : demo
+      ? `${activity.currency ?? activity.token} ${formatTokenAmount(activity.amount, 2)}`
+      : `${formatTokenAmount(activity.amount, 6)} SOL`;
   return (
     <motion.article className="transaction-card" layout initial={{opacity: 0}} animate={{opacity: 1}}>
-      <span className={`transaction-icon ${received ? 'received' : 'sent'}`}>{received ? <ArrowDownLeft size={18} /> : <ArrowUpRight size={18} />}</span>
+      <span className={`transaction-icon ${demo ? 'demo' : received ? 'received' : 'sent'}`}>{demo ? <ReceiptText size={18} /> : received ? <ArrowDownLeft size={18} /> : <ArrowUpRight size={18} />}</span>
       <div className="transaction-main">
-        <strong>{received ? 'Received SOL' : 'Sent SOL'}</strong>
+        <strong>{activity.description ?? (received ? 'Received SOL' : 'Sent SOL')}</strong>
         <span>{activity.timestamp ? new Intl.DateTimeFormat('en', {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}).format(activity.timestamp) : 'Time unavailable'}</span>
-        <a href={explorerTransactionUrl(activity.signature, cluster)} target="_blank" rel="noreferrer">{activity.signature.slice(0, 6)}…{activity.signature.slice(-5)} <ExternalLink size={11} /></a>
+        {demo
+          ? <small className="transaction-reference">Ref: {activity.reference}</small>
+          : <a href={explorerTransactionUrl(activity.signature, cluster)} target="_blank" rel="noreferrer">{activity.signature.slice(0, 6)}…{activity.signature.slice(-5)} <ExternalLink size={11} /></a>}
       </div>
       <div className="transaction-amount">
-        <strong>{received ? '+' : '-'}{activity.amount === null ? '—' : formatTokenAmount(activity.amount, 6)} SOL</strong>
-        <span className={`status-badge ${activity.status}`}>{activityLabel(activity)}</span>
+        <strong>{received ? '+' : '-'}{amount}</strong>
+        <div className="transaction-badges">{activityBadges(activity).map((badge) => <span className={`status-badge ${badge.tone}`} key={badge.label}>{badge.label}</span>)}</div>
       </div>
     </motion.article>
   );
 }
 
-export type ActivityFilter = 'all' | 'ussd' | 'dashboard' | 'received' | 'sent' | 'pending';
+export type ActivityFilter = 'all' | 'onchain' | 'ussd' | 'dashboard' | 'demo' | 'received' | 'sent' | 'pending';
 const activityFilters: Array<{value: ActivityFilter; label: string}> = [
   {value: 'all', label: 'All'},
+  {value: 'onchain', label: 'On-chain'},
   {value: 'ussd', label: 'USSD'},
   {value: 'dashboard', label: 'Dashboard'},
+  {value: 'demo', label: 'Demo'},
   {value: 'received', label: 'Received'},
   {value: 'sent', label: 'Sent'},
   {value: 'pending', label: 'Pending'},
@@ -260,6 +283,7 @@ export function TransactionTimeline({activity, cluster, preview = false, loading
     if (filter === 'all') return true;
     if (filter === 'received' || filter === 'sent') return entry.direction === filter;
     if (filter === 'pending') return entry.status === 'pending';
+    if (filter === 'onchain') return entry.activityType !== 'demo' && entry.source !== 'demo';
     return entry.source === filter;
   });
   const shown = preview ? filtered.slice(0, 4) : filtered;
@@ -338,18 +362,114 @@ export function ReceivePanel({address, cluster}: {address: string; cluster: stri
   );
 }
 
+export type EverydayPaymentKind = 'bank_transfer' | 'airtime' | 'bill_payment';
+
+const everydayPayments: Array<{
+  kind: EverydayPaymentKind;
+  title: string;
+  description: string;
+  icon: typeof Landmark;
+  tone: string;
+}> = [
+  {kind: 'bank_transfer', title: 'Send to Local Bank', description: 'Preview a local account transfer receipt.', icon: Landmark, tone: 'blue'},
+  {kind: 'airtime', title: 'Buy Airtime', description: 'Try instant airtime for major networks.', icon: Smartphone, tone: 'green'},
+  {kind: 'bill_payment', title: 'Pay Bills', description: 'Explore everyday bill categories.', icon: Zap, tone: 'amber'},
+];
+
+export function EverydayPayments({onPreview}: {onPreview: (kind: EverydayPaymentKind) => void}) {
+  return (
+    <div className="everyday-payment-grid">
+      {everydayPayments.map((payment) => {
+        const Icon = payment.icon;
+        return (
+          <motion.button className="everyday-payment-card" type="button" key={payment.kind} onClick={() => onPreview(payment.kind)} whileHover={{y: -3}} whileTap={{scale: .99}}>
+            <span className={`feature-icon ${payment.tone}`}><Icon size={19} /></span>
+            <span className="demo-label">Demo Preview</span>
+            <strong>{payment.title}</strong>
+            <p>{payment.description}</p>
+            <span className="card-arrow">Explore <ArrowUpRight size={14} /></span>
+          </motion.button>
+        );
+      })}
+    </div>
+  );
+}
+
+const paymentPreviewContent: Record<EverydayPaymentKind, {title: string; description: string; steps: string[]; icon: typeof Landmark; tone: string}> = {
+  bank_transfer: {title: 'Send to Local Bank', description: 'Resolve a demo bank account and generate a realistic receipt.', steps: ['Choose bank', 'Enter account number', 'Confirm demo account name', 'Enter amount and approve with PIN'], icon: Landmark, tone: 'blue'},
+  airtime: {title: 'Buy Airtime', description: 'Preview airtime delivery across MTN, Airtel, Glo, and 9mobile.', steps: ['Choose network', 'Enter phone number', 'Enter amount', 'Approve with PIN and receive receipt'], icon: Smartphone, tone: 'green'},
+  bill_payment: {title: 'Pay Bills', description: 'Preview electricity, TV, internet, water, and education payments.', steps: ['Choose bill category', 'Enter customer ID', 'Enter amount', 'Approve with PIN and receive receipt'], icon: Zap, tone: 'amber'},
+};
+
+export function PaymentPreviewPanel({kind, shortcode}: {kind: EverydayPaymentKind; shortcode: string}) {
+  const content = paymentPreviewContent[kind];
+  const Icon = content.icon;
+  return (
+    <motion.section className="feature-card payment-preview-panel" {...cardMotion}>
+      <div className="panel-heading"><span className={`feature-icon ${content.tone}`}><Icon size={21} /></span><div><span className="card-kicker">Demo Preview</span><h2>{content.title}</h2><p>{content.description}</p></div></div>
+      <div className="demo-disclaimer"><ShieldCheck size={16} /><p>No real fiat, airtime, or bill payment is processed. Your existing Rove PIN and server-side USSD protections still authorize the demo.</p></div>
+      <div className="preview-steps">{content.steps.map((step, index) => <div key={step}><span>{index + 1}</span><strong>{step}</strong></div>)}</div>
+      <a className="primary-action full" href={`tel:${shortcode.replace('#', '%23')}`}><Smartphone size={17} /> Continue securely with {shortcode}</a>
+    </motion.section>
+  );
+}
+
 export function SendPanel({balance, shortcode, onOpenUssd}: {balance: number; shortcode: string; onOpenUssd: () => void}) {
   const [recipient, setRecipient] = useState('');
   const [amount, setAmount] = useState('');
   const [reviewing, setReviewing] = useState(false);
+  const [resolution, setResolution] = useState<
+    | {state: 'idle' | 'loading' | 'unregistered' | 'error'}
+    | {state: 'registered'; displayName: string | null; walletAddress: string; walletPreview: string}
+  >({state: 'idle'});
   const amountNumber = Number(amount);
+  const phoneRecipient = /^\+[1-9]\d{7,14}$/.test(recipient);
   let walletAddressIsValid = false;
   try {
     walletAddressIsValid = new PublicKey(recipient).toBase58() === recipient;
   } catch {
     walletAddressIsValid = false;
   }
-  const recipientIsValid = /^\+[1-9]\d{7,14}$/.test(recipient) || walletAddressIsValid;
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!phoneRecipient) {
+      queueMicrotask(() => {
+        if (!controller.signal.aborted) setResolution({state: 'idle'});
+      });
+      return () => controller.abort();
+    }
+    const timeout = window.setTimeout(() => {
+      setResolution({state: 'loading'});
+      void getAccessToken().then(async (token) => {
+        if (!token) throw new Error('Authentication unavailable');
+        const query = new URLSearchParams({phoneNumber: recipient});
+        const response = await fetch(`${API_URL}/profiles/resolve-recipient?${query}`, {
+          headers: {Authorization: `Bearer ${token}`}, signal: controller.signal, cache: 'no-store',
+        });
+        const payload = await response.json() as {
+          registered?: boolean;
+          displayName?: string | null;
+          walletAddress?: string;
+          walletPreview?: string;
+        };
+        if (!response.ok) throw new Error('Recipient lookup failed');
+        if (controller.signal.aborted) return;
+        if (!payload.registered || !payload.walletAddress || !payload.walletPreview) {
+          setResolution({state: 'unregistered'});
+          return;
+        }
+        setResolution({state: 'registered', displayName: payload.displayName ?? null, walletAddress: payload.walletAddress, walletPreview: payload.walletPreview});
+      }).catch(() => {
+        if (!controller.signal.aborted) setResolution({state: 'error'});
+      });
+    }, 450);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [phoneRecipient, recipient]);
+
+  const recipientIsValid = walletAddressIsValid || (phoneRecipient && resolution.state === 'registered');
   const valid = recipientIsValid && Number.isFinite(amountNumber) && amountNumber > 0 && amountNumber < balance;
   return (
     <motion.section className="send-panel feature-card" {...cardMotion}>
@@ -360,7 +480,8 @@ export function SendPanel({balance, shortcode, onOpenUssd}: {balance: number; sh
             <div className="review-mark"><ShieldCheck size={24} /></div>
             <div className="review-heading"><span className="card-kicker">Review transfer</span><h3>{formatTokenAmount(amountNumber)} SOL</h3><p>Confirm these details before continuing on your linked phone.</p></div>
             <div className="review-details">
-              <div><span>Recipient</span><strong>{recipient}</strong></div>
+              <div><span>Recipient</span><strong>{resolution.state === 'registered' ? resolution.displayName ?? 'Verified Rove User' : recipient}</strong></div>
+              {resolution.state === 'registered' && <div><span>Resolved wallet</span><strong>{resolution.walletPreview}</strong></div>}
               <div><span>Asset</span><strong>Solana (SOL)</strong></div>
               <div><span>Amount</span><strong>{formatTokenAmount(amountNumber)} SOL</strong></div>
               <div><span>Estimated fee</span><strong>≈ 0.000005 SOL</strong></div>
@@ -371,7 +492,12 @@ export function SendPanel({balance, shortcode, onOpenUssd}: {balance: number; sh
           </motion.div>
         ) : (
           <motion.div className="send-form" key="form" initial={{opacity: 0, x: -12}} animate={{opacity: 1, x: 0}} exit={{opacity: 0, x: 10}}>
-            <label><span>Recipient phone or wallet address</span><div className="premium-input"><Phone size={17} /><input value={recipient} onChange={(event) => setRecipient(event.target.value.replace(/[\s()-]/g, ''))} placeholder="+234… or Solana address" inputMode="text" autoCapitalize="none" autoCorrect="off" spellCheck={false} /></div></label>
+            <label><span>Recipient phone or wallet address</span><div className="premium-input"><Phone size={17} /><input value={recipient} onChange={(event) => setRecipient(event.target.value.replace(/[\s()-]/g, ''))} placeholder="+234… or Solana address" inputMode="text" autoCapitalize="none" autoCorrect="off" spellCheck={false} /></div>
+              {phoneRecipient && resolution.state === 'loading' && <span className="recipient-resolution checking"><RefreshCw size={14} className="spinning" /> Verifying Rove recipient…</span>}
+              {phoneRecipient && resolution.state === 'registered' && <span className="recipient-resolution verified"><ShieldCheck size={15} /><span><strong>Verified Rove User</strong><small>{resolution.displayName ?? 'Rove User'} · Wallet {resolution.walletPreview}</small></span></span>}
+              {phoneRecipient && resolution.state === 'unregistered' && <span className="recipient-resolution unregistered"><span><strong>This phone number is not registered with Rove.</strong><small>Use a Solana wallet address instead.</small></span><button type="button" onClick={() => setRecipient('')}>Enter address</button></span>}
+              {phoneRecipient && resolution.state === 'error' && <span className="recipient-resolution unregistered"><span><strong>Recipient verification is unavailable.</strong><small>Try again or use a wallet address.</small></span></span>}
+            </label>
             <label><span>Token</span><div className="premium-input token-selector"><span className="mini-sol-logo">S</span><select aria-label="Token" value="SOL" disabled><option value="SOL">Solana (SOL)</option></select><small>USSD supported</small></div></label>
             <label><span>Amount</span><div className="premium-input amount-input"><input value={amount} onChange={(event) => setAmount(event.target.value.replace(/[^\d.]/g, ''))} placeholder="0.00" inputMode="decimal" /><strong>SOL</strong></div></label>
             <div className="send-details"><div><span>Available</span><strong>{formatTokenAmount(balance)} SOL</strong></div><div><span>Estimated network fee</span><strong>≈ 0.000005 SOL</strong></div><div><span>Authorization</span><strong>6-digit PIN via USSD</strong></div></div>

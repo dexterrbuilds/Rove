@@ -29,10 +29,13 @@ import {
   ReceivePanel,
   SecurityCard,
   SendPanel,
+  EverydayPayments,
+  PaymentPreviewPanel,
   TokenList,
   TransactionTimeline,
   USSDCard,
   type SecurityCheck,
+  type EverydayPaymentKind,
 } from './dashboard-ui';
 
 const navigation: Array<{view: DashboardView; label: string; icon: typeof Home}> = [
@@ -94,6 +97,7 @@ export function FintechDashboard({
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notice, setNotice] = useState('');
+  const [selectedPayment, setSelectedPayment] = useState<EverydayPaymentKind>('bank_transfer');
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -141,6 +145,10 @@ export function FintechDashboard({
   }
 
   const selectedLabel = view === 'home' ? 'Overview' : `${view[0].toUpperCase()}${view.slice(1)}`;
+  const previewPayment = (kind: EverydayPaymentKind) => {
+    setSelectedPayment(kind);
+    selectView('payments');
+  };
 
   return (
     <div className="bank-app">
@@ -184,6 +192,11 @@ export function FintechDashboard({
                   <div className="home-primary">
                     <PortfolioCard totalUsd={portfolio.totalUsd} solBalance={portfolio.solBalance} activity={portfolio.activity} cluster={cluster} loading={portfolio.loading} />
                     <QuickActions onSelect={selectView} />
+                    <section className="content-card everyday-payments-section">
+                      <SectionTitle title="Everyday Payments" action={<span className="demo-section-label">Demo Preview</span>} />
+                      <p className="section-description">Fintech conveniences layered onto your Rove wallet—crypto stays in control.</p>
+                      <EverydayPayments onPreview={previewPayment} />
+                    </section>
                     <section className="content-card">
                       <SectionTitle title="Recent activity" action={<button className="inline-link" type="button" onClick={() => selectView('activity')}>See all <ArrowRight size={14} /></button>} />
                       <TransactionTimeline activity={portfolio.activity} cluster={cluster} preview loading={portfolio.loading} />
@@ -239,6 +252,13 @@ export function FintechDashboard({
               <ViewTransition view={view}>
                 <PageHeading eyebrow="Deposit" title="Receive" description="Share your wallet address to receive SOL on the correct network." />
                 <div className="single-panel"><ReceivePanel address={walletAddress} cluster={cluster} /></div>
+              </ViewTransition>
+            )}
+
+            {view === 'payments' && (
+              <ViewTransition view={view}>
+                <PageHeading eyebrow="Everyday Payments" title="Demo Preview" description="Explore future payment conveniences without moving real fiat or changing your wallet security." />
+                <div className="single-panel"><PaymentPreviewPanel kind={selectedPayment} shortcode={shortcode} /></div>
               </ViewTransition>
             )}
           </AnimatePresence>

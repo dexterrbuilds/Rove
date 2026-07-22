@@ -1,4 +1,4 @@
-export type DashboardView = 'home' | 'assets' | 'activity' | 'ussd' | 'security' | 'send' | 'receive';
+export type DashboardView = 'home' | 'assets' | 'activity' | 'ussd' | 'security' | 'send' | 'receive' | 'payments';
 
 export type ProfileStatus =
   | {status: 'not_started'; phoneNumber?: string | null; walletAddress?: string; activationExpired?: boolean}
@@ -20,7 +20,7 @@ export type WalletAsset = {
 
 export type ActivityDirection = 'sent' | 'received';
 export type ActivityStatus = 'confirmed' | 'pending' | 'failed';
-export type ActivitySource = 'ussd' | 'dashboard' | 'received' | 'onchain';
+export type ActivitySource = 'ussd' | 'dashboard' | 'received' | 'onchain' | 'demo';
 
 export type WalletActivity = {
   signature: string;
@@ -31,6 +31,24 @@ export type WalletActivity = {
   source: ActivitySource;
   timestamp: number | null;
   feeSol?: number;
+  activityType?: 'onchain' | 'demo';
+  description?: string;
+  reference?: string;
+  currency?: string;
+};
+
+export type DemoTransaction = {
+  id: string;
+  paymentKind: 'bank_transfer' | 'airtime' | 'bill_payment';
+  description: string;
+  amountMinor: string;
+  currency: 'NGN';
+  reference: string;
+  status: 'completed' | 'failed';
+  channel: 'ussd' | 'dashboard';
+  processingTime: string;
+  createdAt: string;
+  completedAt: string | null;
 };
 
 export type PortfolioData = {

@@ -7,6 +7,7 @@ import {ArrowRight, Check, Copy, ExternalLink, LogOut, Radio, RefreshCw, ShieldC
 import {parsePhoneNumberFromString} from 'libphonenumber-js/min';
 import {FintechDashboard} from '@/components/dashboard/fintech-dashboard';
 import {useSolanaPortfolio} from '@/hooks/use-solana-portfolio';
+import {useDemoTransactions} from '@/hooks/use-demo-transactions';
 import type {ProfileStatus} from '@/lib/dashboard-types';
 
 type Activation = {
@@ -95,6 +96,22 @@ export default function Home() {
   const pinIsValid = /^\d{6}$/.test(pin);
   const formIsValid = Boolean(wallet && phoneIsValid && pinIsValid && PRIVY_POLICY_CONFIG_IS_VALID);
   const portfolio = useSolanaPortfolio(walletAddress, SOLANA_CLUSTER);
+  const demoTransactions = useDemoTransactions(authenticated && profileStatus?.status === 'linked');
+  const dashboardPortfolio = {
+    ...portfolio,
+    activity: [
+      ...portfolio.activity.map((activity) => demoTransactions.ussdSignatures.has(activity.signature)
+        ? {...activity, source: 'ussd' as const}
+        : activity),
+      ...demoTransactions.pendingUssdActivity,
+      ...demoTransactions.activity,
+    ]
+      .sort((first, second) => (second.timestamp ?? 0) - (first.timestamp ?? 0)),
+    refresh: () => {
+      portfolio.refresh();
+      demoTransactions.refresh();
+    },
+  };
 
   const authorizeRestrictedSigner = useCallback(async (address: string) => {
     if (!PRIVY_POLICY_CONFIG_IS_VALID) {
@@ -294,7 +311,7 @@ export default function Home() {
         securityUpgradeRequired={profileStatus.securityUpgradeRequired}
         cluster={SOLANA_CLUSTER}
         shortcode={USSD_CODE}
-        portfolio={portfolio}
+        portfolio={dashboardPortfolio}
         verifiedAt={lastVerifiedAt}
         onLogout={logout}
       />
@@ -609,9 +626,9 @@ function Onboarding({onLogin}: {onLogin: () => void}) {
             <div className="phone-screen">
               <Signal size={17} />
               <span className="ussd-label">ROVE · USSD</span>
-              <h3>Web3 Assistant</h3>
-              <p>1. Check Balance</p>
-              <p>2. Send SOL</p>
+              <h3>Rove Wallet</h3>
+              <p>1. Balance · 2. Receive</p>
+              <p>3. Send SOL · 4–6. Demo Pay</p>
               <div className="ussd-input">Reply…</div>
             </div>
           </div>
