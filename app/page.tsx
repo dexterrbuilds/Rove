@@ -5,17 +5,15 @@ import {getAccessToken, usePrivy, useSigners, type WalletWithMetadata} from '@pr
 import {useWallets} from '@privy-io/react-auth/solana';
 import {ArrowRight, Check, Copy, ExternalLink, LogOut, Radio, RefreshCw, ShieldCheck, Signal, Smartphone, WalletCards} from 'lucide-react';
 import {parsePhoneNumberFromString} from 'libphonenumber-js/min';
+import {FintechDashboard} from '@/components/dashboard/fintech-dashboard';
+import {useSolanaPortfolio} from '@/hooks/use-solana-portfolio';
+import type {ProfileStatus} from '@/lib/dashboard-types';
 
 type Activation = {
   activationCode: string;
   activationExpiresAt: string;
   phoneNumber: string;
 };
-
-type ProfileStatus =
-  | {status: 'not_started'; phoneNumber?: string | null; walletAddress?: string; activationExpired?: boolean}
-  | {status: 'pending'; phoneNumber: string; walletAddress: string; activationCode: string; activationExpiresAt: string}
-  | {status: 'linked'; phoneNumber: string; walletAddress: string; securityUpgradeRequired: boolean};
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 const USSD_CODE = process.env.NEXT_PUBLIC_USSD_SHORTCODE ?? '*384*1234#';
@@ -79,6 +77,7 @@ export default function Home() {
   const [profileLoading, setProfileLoading] = useState(true);
   const [statusError, setStatusError] = useState('');
   const [checkingActivation, setCheckingActivation] = useState(false);
+  const [lastVerifiedAt, setLastVerifiedAt] = useState<Date | null>(null);
 
   const embeddedAccount = useMemo(
     () => user?.linkedAccounts.find(
@@ -95,6 +94,7 @@ export default function Home() {
   const phoneIsValid = isValidInternationalPhone(phoneNumber);
   const pinIsValid = /^\d{6}$/.test(pin);
   const formIsValid = Boolean(wallet && phoneIsValid && pinIsValid && PRIVY_POLICY_CONFIG_IS_VALID);
+  const portfolio = useSolanaPortfolio(walletAddress, SOLANA_CLUSTER);
 
   const authorizeRestrictedSigner = useCallback(async (address: string) => {
     if (!PRIVY_POLICY_CONFIG_IS_VALID) {
@@ -134,6 +134,7 @@ export default function Home() {
       if (!response.ok) throw new Error(payload.error ?? 'Could not restore your offline access status.');
 
       setProfileStatus(payload);
+      setLastVerifiedAt(new Date());
       setStatusError('');
       if (payload.status === 'linked') {
         setPhoneNumber(payload.phoneNumber);
@@ -283,6 +284,21 @@ export default function Home() {
 
   if (!authenticated) {
     return <Onboarding onLogin={login} />;
+  }
+
+  if (profileStatus?.status === 'linked' && !profileStatus.securityUpgradeRequired && walletAddress) {
+    return (
+      <FintechDashboard
+        walletAddress={walletAddress}
+        phoneNumber={profileStatus.phoneNumber}
+        securityUpgradeRequired={profileStatus.securityUpgradeRequired}
+        cluster={SOLANA_CLUSTER}
+        shortcode={USSD_CODE}
+        portfolio={portfolio}
+        verifiedAt={lastVerifiedAt}
+        onLogout={logout}
+      />
+    );
   }
 
   return (
