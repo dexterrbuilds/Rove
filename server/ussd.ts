@@ -82,10 +82,20 @@ ussdRouter.post('/ussd-blockchain', authenticateUssdCallback, authenticatedUssdR
     const networkCode = String(request.body.networkCode ?? '');
     const text = String(request.body.text ?? '').trim();
 
-    if (!/^[\w:.-]{1,200}$/.test(sessionId)
-        || !phone
-        || !config.africasTalkingAllowedNetworkCodes.includes(networkCode)
-        || text.length > 300) {
+    const invalidFields = [
+      !/^[\w:.-]{1,200}$/.test(sessionId) ? 'session_id' : null,
+      !phone ? 'phone_number_or_country' : null,
+      !config.africasTalkingAllowedNetworkCodes.includes(networkCode) ? 'network_code' : null,
+      text.length > 300 ? 'text_length' : null,
+    ].filter((field): field is string => Boolean(field));
+
+    if (!phone || invalidFields.length > 0) {
+      // Network codes are provider identifiers, not user secrets. Log only the
+      // rejected field names and network code—never the phone, session, or text.
+      console.warn('USSD request rejected by validation:', {
+        invalidFields,
+        networkCode: networkCode || '[missing]',
+      });
       return response.send(textResponse('END', 'Error: Invalid USSD request.'));
     }
 
