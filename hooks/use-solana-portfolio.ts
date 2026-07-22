@@ -19,8 +19,9 @@ function shortenMint(mint: string) {
   return `${mint.slice(0, 4)}…${mint.slice(-4)}`;
 }
 
-async function fetchSolPrice(cluster: Cluster, signal: AbortSignal) {
-  if (cluster !== 'mainnet') return {price: 0, change: null};
+async function fetchSolPrice(signal: AbortSignal) {
+  // Use the live SOL market price as a reference on every cluster. Devnet and
+  // testnet SOL remain valueless test assets; the UI labels this distinction.
   const response = await fetch(
     'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd&include_24hr_change=true',
     {signal, cache: 'no-store'},
@@ -131,7 +132,7 @@ export function useSolanaPortfolio(address: string | undefined, cluster: Cluster
       connection.getBalance(owner, 'confirmed'),
       fetchTokenAssets(connection, owner),
       fetchActivity(connection, owner),
-      fetchSolPrice(cluster, controller.signal).catch(() => ({price: null, change: null})),
+      fetchSolPrice(controller.signal).catch(() => ({price: null, change: null})),
     ]).then(([lamports, tokens, activity, market]) => {
       if (controller.signal.aborted) return;
       const solBalance = lamports / 1_000_000_000;

@@ -192,7 +192,7 @@ export function FintechDashboard({
                   <div className="home-secondary">
                     <section className="content-card assets-preview">
                       <SectionTitle title="Your assets" action={<button className="inline-link" type="button" onClick={() => selectView('assets')}>View all</button>} />
-                      <TokenList assets={portfolio.assets.slice(0, 4)} cluster={cluster} loading={portfolio.loading} />
+                      <TokenList assets={portfolio.assets.slice(0, 4)} loading={portfolio.loading} />
                     </section>
                     <USSDCard phoneNumber={phoneNumber} shortcode={shortcode} secure={secure} onCopy={() => void copyShortcode()} onReconnect={reconnectPhone} />
                   </div>
@@ -203,7 +203,7 @@ export function FintechDashboard({
             {view === 'assets' && (
               <ViewTransition view={view}>
                 <PageHeading eyebrow="Portfolio" title="Assets" description="Everything held by your Solana wallet, sorted by value." action={<button className="secondary-action" type="button" onClick={portfolio.refresh}><RefreshCw size={15} /> Refresh</button>} />
-                <div className="page-grid wide-main"><PortfolioCard totalUsd={portfolio.totalUsd} solBalance={portfolio.solBalance} activity={portfolio.activity} cluster={cluster} loading={portfolio.loading} /><section className="content-card"><SectionTitle title="All assets" /><TokenList assets={portfolio.assets} cluster={cluster} loading={portfolio.loading} /></section></div>
+                <div className="page-grid wide-main"><PortfolioCard totalUsd={portfolio.totalUsd} solBalance={portfolio.solBalance} activity={portfolio.activity} cluster={cluster} loading={portfolio.loading} /><section className="content-card"><SectionTitle title="All assets" /><TokenList assets={portfolio.assets} loading={portfolio.loading} /></section></div>
               </ViewTransition>
             )}
 

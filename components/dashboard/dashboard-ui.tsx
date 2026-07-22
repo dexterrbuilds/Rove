@@ -32,8 +32,7 @@ const cardMotion = {
   transition: {duration: 0.32, ease: [0.22, 1, 0.36, 1] as const},
 };
 
-export function formatCurrency(value: number | null, cluster: string) {
-  if (cluster !== 'mainnet') return '$0.00';
+export function formatCurrency(value: number | null) {
   if (value === null) return '—';
   return new Intl.NumberFormat('en-US', {style: 'currency', currency: 'USD'}).format(value);
 }
@@ -119,7 +118,7 @@ export function PortfolioCard({
         <div>
           <span className="card-kicker">Total portfolio</span>
           <div className="portfolio-value-row">
-            <h2>{loading ? <span className="value-placeholder" /> : hidden ? '••••••' : formatCurrency(totalUsd, cluster)}</h2>
+            <h2>{loading ? <span className="value-placeholder" /> : hidden ? '••••••' : formatCurrency(totalUsd)}</h2>
             <button className="ghost-icon" type="button" onClick={() => setHidden((value) => !value)} aria-label={hidden ? 'Show balance' : 'Hide balance'}>
               {hidden ? <Eye size={17} /> : <EyeOff size={17} />}
             </button>
@@ -130,8 +129,8 @@ export function PortfolioCard({
       </div>
       <BalanceChart activity={activity} />
       <div className="portfolio-foot">
-        <span>{cluster === 'mainnet' ? 'Live market value' : 'Test tokens have no cash value'}</span>
-        <strong>{cluster === 'mainnet' ? 'Portfolio synced' : 'Safe testing mode'}</strong>
+        <span>{cluster === 'mainnet' ? 'Live market value' : 'Reference value at the live SOL price'}</span>
+        <strong>{cluster === 'mainnet' ? 'Portfolio synced' : 'Devnet SOL has no cash value'}</strong>
       </div>
     </motion.section>
   );
@@ -175,12 +174,12 @@ function AssetLogo({asset}: {asset: WalletAsset}) {
   return <span className={asset.isNative ? 'sol-logo' : 'token-logo'}>{asset.isNative ? 'S' : asset.symbol.slice(0, 1)}</span>;
 }
 
-export function AssetCard({asset, cluster}: {asset: WalletAsset; cluster: string}) {
+export function AssetCard({asset}: {asset: WalletAsset}) {
   return (
     <motion.div className="asset-card" layout whileHover={{x: 3}}>
       <div className="asset-identity"><AssetLogo asset={asset} /><div><strong>{asset.name}</strong><span>{asset.symbol}</span></div></div>
       <div className="asset-market">
-        <strong>{asset.usdValue === null ? 'Price unavailable' : formatCurrency(asset.usdValue, cluster)}</strong>
+        <strong>{asset.usdValue === null ? 'Price unavailable' : formatCurrency(asset.usdValue)}</strong>
         <span className={asset.change24h !== null && asset.change24h < 0 ? 'negative' : 'positive'}>
           {asset.change24h === null ? '—' : `${asset.change24h >= 0 ? '+' : ''}${asset.change24h.toFixed(2)}%`}
         </span>
@@ -190,7 +189,7 @@ export function AssetCard({asset, cluster}: {asset: WalletAsset; cluster: string
   );
 }
 
-export function TokenList({assets, cluster, loading}: {assets: WalletAsset[]; cluster: string; loading: boolean}) {
+export function TokenList({assets, loading}: {assets: WalletAsset[]; loading: boolean}) {
   const [showDust, setShowDust] = useState(false);
   const visible = assets.filter((asset) => showDust || asset.usdValue === null || asset.usdValue >= 1 || asset.isNative);
   const hiddenCount = assets.length - visible.length;
@@ -198,7 +197,7 @@ export function TokenList({assets, cluster, loading}: {assets: WalletAsset[]; cl
   if (assets.length === 0) return <EmptyState icon="assets" title="No assets yet" description="Fund this wallet to see assets here." />;
   return (
     <div className="token-list">
-      {visible.map((asset) => <AssetCard asset={asset} cluster={cluster} key={asset.mint} />)}
+      {visible.map((asset) => <AssetCard asset={asset} key={asset.mint} />)}
       {hiddenCount > 0 && (
         <button className="text-button" type="button" onClick={() => setShowDust((value) => !value)}>
           <ChevronDown size={15} className={showDust ? 'rotated' : ''} /> {showDust ? 'Hide' : 'Show'} {hiddenCount} dust asset{hiddenCount === 1 ? '' : 's'}
