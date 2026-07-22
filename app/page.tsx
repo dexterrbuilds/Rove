@@ -15,7 +15,7 @@ type Activation = {
 type ProfileStatus =
   | {status: 'not_started'; phoneNumber?: string | null; walletAddress?: string; activationExpired?: boolean}
   | {status: 'pending'; phoneNumber: string; walletAddress: string; activationCode: string; activationExpiresAt: string}
-  | {status: 'linked'; phoneNumber: string; walletAddress: string};
+  | {status: 'linked'; phoneNumber: string; walletAddress: string; securityUpgradeRequired: boolean};
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 const USSD_CODE = process.env.NEXT_PUBLIC_USSD_SHORTCODE ?? '*384*1234#';
@@ -24,6 +24,7 @@ const PRIVY_POLICY_IDS = (process.env.NEXT_PUBLIC_PRIVY_POLICY_IDS ?? '')
   .split(',')
   .map((value) => value.trim())
   .filter(Boolean);
+const PRIVY_POLICY_CONFIG_IS_VALID = Boolean(PRIVY_SIGNER_ID) && PRIVY_POLICY_IDS.length === 1;
 
 function createActivationCode() {
   const values = new Uint32Array(1);
@@ -82,8 +83,8 @@ export default function Home() {
   );
   const walletAddress = wallet?.address;
   const phoneIsValid = isValidInternationalPhone(phoneNumber);
-  const pinIsValid = /^\d{4}$/.test(pin);
-  const formIsValid = Boolean(wallet && phoneIsValid && pinIsValid && PRIVY_SIGNER_ID);
+  const pinIsValid = /^\d{6}$/.test(pin);
+  const formIsValid = Boolean(wallet && phoneIsValid && pinIsValid && PRIVY_POLICY_CONFIG_IS_VALID);
 
   const refreshProfile = useCallback(async (quiet = false, showChecking = false) => {
     if (!authenticated || !walletAddress) return;
@@ -163,8 +164,8 @@ export default function Home() {
       setError('Your Solana wallet is still being created. Please try again in a moment.');
       return;
     }
-    if (!PRIVY_SIGNER_ID) {
-      setError('Rove is missing its Privy signer ID. Add NEXT_PUBLIC_PRIVY_SIGNER_ID to the web service and rebuild it.');
+    if (!PRIVY_POLICY_CONFIG_IS_VALID) {
+      setError('Rove requires exactly one Privy signer ID and one signer policy ID. Correct the web configuration and rebuild.');
       return;
     }
     setPhoneTouched(true);
@@ -174,7 +175,7 @@ export default function Home() {
       return;
     }
     if (!pinIsValid) {
-      setError('Your security PIN must contain exactly 4 digits.');
+      setError('Your security PIN must contain exactly 6 digits.');
       return;
     }
 
@@ -186,7 +187,7 @@ export default function Home() {
         await withTimeout(
           addSigners({
             address: wallet.address,
-            signers: [{signerId: PRIVY_SIGNER_ID, policyIds: PRIVY_POLICY_IDS}],
+            signers: [{signerId: PRIVY_SIGNER_ID!, policyIds: PRIVY_POLICY_IDS}],
           }),
           30_000,
           'Adding the Privy signer timed out. Confirm that the signer ID is the key quorum ID from the same Privy app.',
@@ -311,6 +312,11 @@ export default function Home() {
         <section className="setup-panel">
           {profileLoading && !profileStatus ? (
             <StatusLoading />
+          ) : profileStatus?.status === 'linked' && profileStatus.securityUpgradeRequired ? (
+            <SecurityUpgrade
+              walletAddress={profileStatus.walletAddress}
+              onComplete={() => void refreshProfile()}
+            />
           ) : profileStatus?.status === 'linked' ? (
             <OfflineAccessReady profile={profileStatus} />
           ) : activation ? (
@@ -343,12 +349,12 @@ export default function Home() {
                   <small className={phoneTouched && !phoneIsValid ? 'field-error' : ''}>{phoneTouched && !phoneIsValid ? 'Enter a complete international number, including country code.' : 'Use the number you will dial the USSD code from.'}</small>
                 </label>
                 <label>
-                  <span>4-digit transaction PIN</span>
-                  <div className={`input-shell pin-shell ${pinTouched && !pinIsValid ? 'invalid' : ''}`}><ShieldCheck size={19} /><input type="password" inputMode="numeric" autoComplete="new-password" maxLength={4} placeholder="••••" value={pin} aria-invalid={pinTouched && !pinIsValid} onBlur={() => setPinTouched(true)} onChange={(event) => { setPin(event.target.value.replace(/\D/g, '').slice(0, 4)); setError(''); }} /></div>
-                  <small className={pinTouched && !pinIsValid ? 'field-error' : ''}>{pinTouched && !pinIsValid ? 'Enter exactly four digits.' : 'This PIN approves offline transfers. Never share it.'}</small>
+                  <span>6-digit transaction PIN</span>
+                  <div className={`input-shell pin-shell ${pinTouched && !pinIsValid ? 'invalid' : ''}`}><ShieldCheck size={19} /><input type="password" inputMode="numeric" autoComplete="new-password" maxLength={6} placeholder="••••••" value={pin} aria-invalid={pinTouched && !pinIsValid} onBlur={() => setPinTouched(true)} onChange={(event) => { setPin(event.target.value.replace(/\D/g, '').slice(0, 6)); setError(''); }} /></div>
+                  <small className={pinTouched && !pinIsValid ? 'field-error' : ''}>{pinTouched && !pinIsValid ? 'Enter exactly six digits.' : 'This PIN approves offline transfers. Never share it.'}</small>
                 </label>
                 {error && <div className="form-error" role="alert">{error}</div>}
-                {!PRIVY_SIGNER_ID && <div className="form-error" role="alert">Privy signer configuration is missing. Add <code>NEXT_PUBLIC_PRIVY_SIGNER_ID</code> to the web service and rebuild.</div>}
+                {!PRIVY_POLICY_CONFIG_IS_VALID && <div className="form-error" role="alert">Privy requires exactly one signer and policy. Set <code>NEXT_PUBLIC_PRIVY_SIGNER_ID</code> and one value in <code>NEXT_PUBLIC_PRIVY_POLICY_IDS</code>, then rebuild.</div>}
                 <button className="primary-button" type="submit" disabled={Boolean(submitPhase) || !formIsValid} aria-busy={Boolean(submitPhase)}>
                   {submitPhase === 'delegating' ? 'Adding secure signer…' : submitPhase === 'registering' ? 'Saving secure setup…' : 'Generate activation code'} <ArrowRight size={18} />
                 </button>
@@ -460,6 +466,58 @@ function OfflineAccessReady({profile}: {profile: Extract<ProfileStatus, {status:
       <a className="explorer-link" href={`https://solscan.io/account/${profile.walletAddress}`} target="_blank" rel="noreferrer">
         View wallet on Solscan <ExternalLink size={14} />
       </a>
+    </div>
+  );
+}
+
+function SecurityUpgrade({walletAddress, onComplete}: {walletAddress: string; onComplete: () => void}) {
+  const [pin, setPin] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  const valid = /^\d{6}$/.test(pin) && PRIVY_POLICY_CONFIG_IS_VALID;
+
+  async function upgrade(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!valid) return;
+    setSaving(true);
+    setError('');
+    try {
+      const accessToken = await getAccessToken();
+      if (!accessToken) throw new Error('Your session expired. Sign in again.');
+      const response = await fetch(`${API_URL}/profiles/security/upgrade`, {
+        method: 'POST',
+        headers: {Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json'},
+        body: JSON.stringify({walletAddress, pin}),
+      });
+      const payload = await response.json() as {error?: string};
+      if (!response.ok) throw new Error(payload.error ?? 'Security upgrade failed.');
+      setPin('');
+      onComplete();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Security upgrade failed.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="ready-wrap">
+      <div className="success-icon"><ShieldCheck size={28} strokeWidth={2.5} /></div>
+      <div className="step-label"><span>!</span> SECURITY UPGRADE</div>
+      <h2>Secure offline access</h2>
+      <p className="lede">Before mainnet transactions, replace the legacy PIN and bind the delegated signer to Rove&apos;s restricted Privy policy.</p>
+      <form className="setup-form security-upgrade-form" onSubmit={upgrade}>
+        <label>
+          <span>New 6-digit transaction PIN</span>
+          <div className="input-shell pin-shell"><ShieldCheck size={19} /><input type="password" inputMode="numeric" autoComplete="new-password" maxLength={6} placeholder="••••••" value={pin} onChange={(event) => { setPin(event.target.value.replace(/\D/g, '').slice(0, 6)); setError(''); }} /></div>
+          <small>The previous four-digit PIN cannot authorize another transfer.</small>
+        </label>
+        {error && <div className="form-error" role="alert">{error}</div>}
+        {!PRIVY_POLICY_CONFIG_IS_VALID && <div className="form-error" role="alert">Rove&apos;s signer policy configuration is invalid. Contact the operator.</div>}
+        <button className="primary-button" type="submit" disabled={!valid || saving} aria-busy={saving}>
+          {saving ? 'Applying security controls…' : 'Complete security upgrade'} <ArrowRight size={18} />
+        </button>
+      </form>
     </div>
   );
 }

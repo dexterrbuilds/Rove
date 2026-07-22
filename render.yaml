@@ -9,6 +9,8 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "20"
+      - key: ROVE_ENVIRONMENT
+        value: production
       - key: WEB_ORIGIN
         sync: false
       - key: SUPABASE_URL
@@ -19,14 +21,38 @@ services:
         sync: false
       - key: PRIVY_APP_SECRET
         sync: false
-      - key: PRIVY_AUTHORIZATION_PRIVATE_KEY
+      - key: PRIVY_SIGNER_ID
         sync: false
+      - key: PRIVY_POLICY_ID
+        sync: false
+      - key: PRIVY_AUTHORIZATION_KEYRING_JSON
+        sync: false
+      - key: PRIVY_AUTHORIZATION_ACTIVE_KEY_IDS
+        sync: false
+      - key: PIN_PEPPER
+        sync: false
+      - key: PIN_HASH_VERSION
+        value: "2"
+      - key: PIN_MAX_FAILURES
+        value: "5"
+      - key: PIN_LOCK_SECONDS
+        value: "900"
       - key: AFRICASTALKING_USSD_CALLBACK_TOKEN
         sync: false
       - key: AFRICASTALKING_USSD_SERVICE_CODE
         sync: false
       - key: AFRICASTALKING_USSD_ALLOWED_IPS
         sync: false
+      - key: AFRICASTALKING_ALLOWED_COUNTRY_CODES
+        sync: false
+      - key: AFRICASTALKING_ALLOWED_NETWORK_CODES
+        sync: false
+      - key: USSD_SESSION_TTL_SECONDS
+        value: "180"
+      - key: TRANSACTION_AUTH_TTL_SECONDS
+        value: "60"
+      - key: MAX_TRANSFER_SOL
+        value: "1"
       - key: SOLANA_RPC_URL
         sync: false
       - key: SOLANA_CAIP2

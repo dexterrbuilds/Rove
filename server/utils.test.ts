@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {formatSolBalance, formatWalletAddress, normalizePhoneNumber, parseSolAmount, textResponse} from './utils.js';
+import {formatSolBalance, formatWalletAddress, normalizePhoneNumber, parseSolAmount, redactSensitive, textResponse, validatePhoneCountry} from './utils.js';
 
 describe('normalizePhoneNumber', () => {
   it('normalizes safe international formatting', () => {
@@ -13,10 +13,20 @@ describe('normalizePhoneNumber', () => {
   });
 });
 
+it('enforces configured phone countries', () => {
+  expect(validatePhoneCountry('+2348012345678', ['NG'])?.countryCode).toBe('NG');
+  expect(validatePhoneCountry('+254712345678', ['NG'])).toBeNull();
+});
+
 describe('parseSolAmount', () => {
   it('converts decimal SOL to exact integer lamports', () => {
     expect(parseSolAmount('0.000000001')).toBe(1n);
     expect(parseSolAmount('1.25')).toBe(1_250_000_000n);
+  });
+
+  it('enforces a deployment-specific transfer ceiling', () => {
+    expect(parseSolAmount('1.01', '1')).toBeNull();
+    expect(parseSolAmount('1', '1')).toBe(1_000_000_000n);
   });
 
   it('rejects zero, excess precision, negative values, and the safety cap', () => {
@@ -25,6 +35,10 @@ describe('parseSolAmount', () => {
     expect(parseSolAmount('-1')).toBeNull();
     expect(parseSolAmount('1001')).toBeNull();
   });
+});
+
+it('redacts authentication and key material from errors', () => {
+  expect(redactSensitive('Bearer abc.def pin=123456 at_token=secret')).toBe('Bearer [REDACTED] pin=[REDACTED] at_token=[REDACTED]');
 });
 
 it('formats balances and USSD prefixes', () => {

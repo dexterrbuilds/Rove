@@ -11,7 +11,14 @@ export function createApp() {
   app.set('trust proxy', 1);
   app.disable('x-powered-by');
   app.use(cors({origin: config.webOrigin.split(',').map((origin) => origin.trim())}));
-  app.use(express.urlencoded({extended: false, limit: '16kb'}));
+  app.use(express.urlencoded({
+    extended: false,
+    limit: '16kb',
+    verify: (request, _response, buffer) => {
+      // Preserve the exact bytes for optional trusted-edge HMAC verification.
+      (request as express.Request & {rawBody?: Buffer}).rawBody = Buffer.from(buffer);
+    },
+  }));
   app.use(express.json({limit: '16kb'}));
 
   app.get('/health', async (request, response) => {

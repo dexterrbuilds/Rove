@@ -10,11 +10,24 @@ export function normalizePhoneNumber(value: string) {
   return parsed?.isValid() ? parsed.number : null;
 }
 
-export function parseSolAmount(value: string) {
+export function validatePhoneCountry(value: string, allowedCountryCodes: string[]) {
+  const normalized = normalizePhoneNumber(value);
+  if (!normalized) return null;
+  const parsed = parsePhoneNumberFromString(normalized);
+  if (!parsed?.country || !allowedCountryCodes.includes(parsed.country)) return null;
+  return {phoneNumber: parsed.number, countryCode: parsed.country};
+}
+
+export function parseSolAmount(value: string, configuredMaximumSol?: string) {
   if (!/^(?:0|[1-9]\d*)(?:\.\d{1,9})?$/.test(value)) return null;
   const [whole, fraction = ''] = value.split('.');
   const lamports = BigInt(whole) * LAMPORTS_PER_SOL_BIGINT + BigInt(fraction.padEnd(9, '0'));
-  if (lamports <= 0n || lamports > MAX_TRANSFER_LAMPORTS) return null;
+  let maximum = MAX_TRANSFER_LAMPORTS;
+  if (configuredMaximumSol) {
+    const [maxWhole, maxFraction = ''] = configuredMaximumSol.split('.');
+    maximum = BigInt(maxWhole) * LAMPORTS_PER_SOL_BIGINT + BigInt(maxFraction.padEnd(9, '0'));
+  }
+  if (lamports <= 0n || lamports > maximum) return null;
   return lamports;
 }
 
@@ -32,5 +45,13 @@ export function textResponse(prefix: 'CON' | 'END', message: string) {
 }
 
 export function safeErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : 'Unknown error';
+  return redactSensitive(error instanceof Error ? error.message : 'Unknown error');
+}
+
+export function redactSensitive(value: string) {
+  return value
+    .replace(/((?:[?&]|\b)(?:at_token|token|authorization)=)[^&\s]+/gi, '$1[REDACTED]')
+    .replace(/(bearer\s+)[a-z0-9._~+\/-]+/gi, '$1[REDACTED]')
+    .replace(/((?:pin|activation[_ -]?code|private[_ -]?key|secret)\s*[:=]\s*)[^,;\s]+/gi, '$1[REDACTED]')
+    .replace(/-----BEGIN [^-]+ PRIVATE KEY-----[\s\S]*?-----END [^-]+ PRIVATE KEY-----/g, '[REDACTED PRIVATE KEY]');
 }
