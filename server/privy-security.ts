@@ -39,39 +39,6 @@ export async function findOwnedSolanaWallet(privyUserId: string, walletAddress: 
   return null;
 }
 
-export async function migrateAndVerifyWalletSigner(input: {
-  wallet: Wallet;
-  privyUserId: string;
-  userJwt: string;
-}) {
-  const config = getConfig();
-  await assertUserOwnsWallet(input.wallet, input.privyUserId);
-  if (!input.wallet.owner_id) throw new Error('Privy wallet has no owner quorum.');
-  const expected = {
-    walletId: input.wallet.id,
-    walletAddress: input.wallet.address,
-    privyUserId: input.privyUserId,
-    ownerId: input.wallet.owner_id,
-  };
-
-  try {
-    return assertWalletSecurity(input.wallet, expected);
-  } catch {
-    // The live user-owner quorum was verified above; only that user JWT is used
-    // to authorize the signer replacement.
-  }
-
-  await privy.wallets().update(input.wallet.id, {
-    additional_signers: [{
-      signer_id: config.privySignerId,
-      override_policy_ids: [config.privyPolicyId],
-    }],
-    authorization_context: {user_jwts: [input.userJwt]},
-  });
-
-  return attestWalletSecurity(expected);
-}
-
 export async function validatePrivyStartupSecurity() {
   const config = getConfig();
   const [policy, quorum, keys] = await Promise.all([

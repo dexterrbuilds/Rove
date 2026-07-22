@@ -3,7 +3,7 @@ import {z} from 'zod';
 import {privy, supabase} from './clients.js';
 import {getConfig} from './config.js';
 import {hashPin} from './pin-security.js';
-import {attestWalletSecurity, findOwnedSolanaWallet, migrateAndVerifyWalletSigner} from './privy-security.js';
+import {attestWalletSecurity, findOwnedSolanaWallet} from './privy-security.js';
 import {normalizePhoneNumber, safeErrorMessage} from './utils.js';
 
 const registrationSchema = z.object({
@@ -124,7 +124,13 @@ profileRouter.post('/register', async (request, response) => {
     if (!ownedWallet) {
       return response.status(403).json({error: 'The Solana wallet is not owned by this authenticated user.'});
     }
-    await migrateAndVerifyWalletSigner({wallet: ownedWallet, privyUserId: auth.privyUserId, userJwt: auth.token});
+    if (!ownedWallet.owner_id) throw new Error('Privy wallet has no owner quorum.');
+    await attestWalletSecurity({
+      walletId: ownedWallet.id,
+      walletAddress: ownedWallet.address,
+      privyUserId: auth.privyUserId,
+      ownerId: ownedWallet.owner_id,
+    });
 
     const {data: existing, error: readError} = await supabase
       .from('profiles')
@@ -201,7 +207,13 @@ profileRouter.post('/security/upgrade', async (request, response) => {
     if (!wallet || wallet.id !== profile.privy_wallet_id) {
       return response.status(403).json({error: 'Wallet ownership verification failed.'});
     }
-    await migrateAndVerifyWalletSigner({wallet, privyUserId: auth.privyUserId, userJwt: auth.token});
+    if (!wallet.owner_id) throw new Error('Privy wallet has no owner quorum.');
+    await attestWalletSecurity({
+      walletId: wallet.id,
+      walletAddress: wallet.address,
+      privyUserId: auth.privyUserId,
+      ownerId: wallet.owner_id,
+    });
     const hashedPin = await hashPin(input.pin, config.pinPepper);
     const {error: updateError} = await supabase.from('profiles').update({
       hashed_pin: hashedPin,

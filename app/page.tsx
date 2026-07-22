@@ -56,7 +56,7 @@ async function withTimeout<T>(promise: Promise<T>, milliseconds: number, message
 export default function Home() {
   const {ready, authenticated, login, logout, user} = usePrivy();
   const {wallets, ready: walletsReady} = useWallets();
-  const {addSigners} = useSigners();
+  const {addSigners, removeSigners} = useSigners();
   const [phoneNumber, setPhoneNumber] = useState('');
   const [pin, setPin] = useState('');
   const [activation, setActivation] = useState<Activation | null>(null);
@@ -85,6 +85,28 @@ export default function Home() {
   const phoneIsValid = isValidInternationalPhone(phoneNumber);
   const pinIsValid = /^\d{6}$/.test(pin);
   const formIsValid = Boolean(wallet && phoneIsValid && pinIsValid && PRIVY_POLICY_CONFIG_IS_VALID);
+
+  const authorizeRestrictedSigner = useCallback(async (address: string) => {
+    if (!PRIVY_POLICY_CONFIG_IS_VALID) {
+      throw new Error('Rove requires exactly one Privy signer ID and one signer policy ID.');
+    }
+
+    // Privy's addSigners API appends on TEE wallets. Clear legacy/unrestricted
+    // delegates first so the wallet finishes with exactly one scoped signer.
+    await withTimeout(
+      removeSigners({address}),
+      30_000,
+      'Removing the legacy Privy signer timed out. Please try again.',
+    );
+    await withTimeout(
+      addSigners({
+        address,
+        signers: [{signerId: PRIVY_SIGNER_ID!, policyIds: PRIVY_POLICY_IDS}],
+      }),
+      30_000,
+      'Adding the restricted Privy signer timed out. Please try again.',
+    );
+  }, [addSigners, removeSigners]);
 
   const refreshProfile = useCallback(async (quiet = false, showChecking = false) => {
     if (!authenticated || !walletAddress) return;
@@ -183,16 +205,7 @@ export default function Home() {
     try {
       // Explicit user consent adds the app's authorization-key quorum as a scoped
       // signer. The matching private key exists only on the backend.
-      if (!embeddedAccount?.delegated) {
-        await withTimeout(
-          addSigners({
-            address: wallet.address,
-            signers: [{signerId: PRIVY_SIGNER_ID!, policyIds: PRIVY_POLICY_IDS}],
-          }),
-          30_000,
-          'Adding the Privy signer timed out. Confirm that the signer ID is the key quorum ID from the same Privy app.',
-        );
-      }
+      await authorizeRestrictedSigner(wallet.address);
 
       const accessToken = await getAccessToken();
       if (!accessToken) throw new Error('Your session expired. Please sign in again.');
@@ -315,6 +328,7 @@ export default function Home() {
           ) : profileStatus?.status === 'linked' && profileStatus.securityUpgradeRequired ? (
             <SecurityUpgrade
               walletAddress={profileStatus.walletAddress}
+              onAuthorizeSigner={() => authorizeRestrictedSigner(profileStatus.walletAddress)}
               onComplete={() => void refreshProfile()}
             />
           ) : profileStatus?.status === 'linked' ? (
@@ -470,7 +484,15 @@ function OfflineAccessReady({profile}: {profile: Extract<ProfileStatus, {status:
   );
 }
 
-function SecurityUpgrade({walletAddress, onComplete}: {walletAddress: string; onComplete: () => void}) {
+function SecurityUpgrade({
+  walletAddress,
+  onAuthorizeSigner,
+  onComplete,
+}: {
+  walletAddress: string;
+  onAuthorizeSigner: () => Promise<void>;
+  onComplete: () => void;
+}) {
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -482,6 +504,9 @@ function SecurityUpgrade({walletAddress, onComplete}: {walletAddress: string; on
     setSaving(true);
     setError('');
     try {
+      // The authenticated wallet owner explicitly replaces the legacy signer in
+      // Privy's client SDK. The API independently attests the resulting controls.
+      await onAuthorizeSigner();
       const accessToken = await getAccessToken();
       if (!accessToken) throw new Error('Your session expired. Sign in again.');
       const response = await fetch(`${API_URL}/profiles/security/upgrade`, {

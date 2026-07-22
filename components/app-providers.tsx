@@ -11,7 +11,7 @@ export function AppProviders({children}: {children: React.ReactNode}) {
         <div className="config-card">
           <span className="eyebrow">Configuration needed</span>
           <h1>Add your Privy App ID</h1>
-          <p>Copy <code>.env.example</code> to <code>.env.local</code>, then set <code>NEXT_PUBLIC_PRIVY_APP_ID</code>.</p>
+          <p>Set <code>NEXT_PUBLIC_PRIVY_APP_ID</code> in the web service environment, then rebuild.</p>
         </div>
       </main>
     );
