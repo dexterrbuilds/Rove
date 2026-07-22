@@ -1,7 +1,7 @@
 import type {Wallet} from '@privy-io/node';
 import {authorizationKeyProvider, privy, solana} from './clients.js';
 import {authorizationPublicKeyFromPrivateKey} from './authorization-key-provider.js';
-import {getConfig} from './config.js';
+import {getConfig, solanaCaip2MatchesGenesisHash} from './config.js';
 import {assertRestrictedSolanaTransferPolicy, assertWalletSecurityConfiguration, type WalletIdentity} from './wallet-security.js';
 
 export function assertWalletSecurity(wallet: Wallet, expected: WalletIdentity) {
@@ -60,7 +60,7 @@ export async function validatePrivyStartupSecurity() {
   if (new Set(activePublicKeys).size < (quorum.authorization_threshold ?? 1)) {
     throw new Error('Active Privy authorization keys do not satisfy the signer quorum threshold.');
   }
-  if (`solana:${genesisHash}` !== config.solanaCaip2) {
+  if (!solanaCaip2MatchesGenesisHash(config.solanaCaip2, genesisHash)) {
     throw new Error('SOLANA_RPC_URL and SOLANA_CAIP2 refer to different Solana networks.');
   }
 }

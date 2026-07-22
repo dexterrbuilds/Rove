@@ -13,6 +13,15 @@ export function requireSinglePrivyIdentifier(value: string | undefined, label: s
   return identifiers[0];
 }
 
+/** Solana CAIP-2 references are the leading 32 characters of the genesis hash. */
+export function solanaCaip2MatchesGenesisHash(caip2: string, genesisHash: string) {
+  const [namespace, reference, extra] = caip2.split(':');
+  return namespace === 'solana'
+    && !extra
+    && reference.length === 32
+    && genesisHash.startsWith(reference);
+}
+
 const schema = z.object({
   ROVE_ENVIRONMENT: z.enum(['development', 'test', 'staging', 'production']).default('development'),
   SUPABASE_URL: z.string().url(),
