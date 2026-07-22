@@ -19,7 +19,10 @@ export class OnChainTransferProvider implements PaymentProvider<OnChainTransferR
     }
     let blockhash: string;
     try {
-      ({blockhash} = await solana.getLatestBlockhash('confirmed'));
+      // Privy broadcasts through a different RPC provider. A finalized hash is
+      // slightly older but is recognized cluster-wide, avoiding cross-provider
+      // `Blockhash not found` simulation failures on devnet.
+      ({blockhash} = await solana.getLatestBlockhash('finalized'));
     } catch {
       throw new TransferNotSubmittedError('solana_rpc_unavailable');
     }
