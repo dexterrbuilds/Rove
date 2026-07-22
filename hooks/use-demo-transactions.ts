@@ -10,8 +10,9 @@ export function useDemoTransactions(enabled: boolean) {
   const [transactions, setTransactions] = useState<DemoTransaction[]>([]);
   const [ussdTransfers, setUssdTransfers] = useState<Array<{
     id: string;
+    reference: string;
     signature: string | null;
-    status: 'processing' | 'confirmed' | 'unknown';
+    status: 'processing' | 'confirmed' | 'failed' | 'unknown';
     amountLamports: string;
     recipientPhoneNumber: string | null;
     recipientWalletAddress: string;
@@ -75,11 +76,20 @@ export function useDemoTransactions(enabled: boolean) {
       token: 'SOL',
       amount: Number(BigInt(transfer.amountLamports)) / 1_000_000_000,
       direction: 'sent',
-      status: 'pending',
+      status: transfer.status === 'failed'
+        ? 'failed'
+        : transfer.status === 'unknown' || transfer.status === 'confirmed'
+          ? 'uncertain'
+          : 'pending',
       source: 'ussd',
       timestamp: new Date(transfer.createdAt).getTime(),
       activityType: 'onchain',
-      description: transfer.status === 'unknown' ? 'USSD transfer status uncertain' : 'USSD transfer processing',
+      description: transfer.status === 'failed'
+        ? 'USSD transfer was rejected'
+        : transfer.status === 'unknown' || transfer.status === 'confirmed'
+          ? 'USSD transfer status uncertain'
+          : 'USSD transfer processing',
+      reference: transfer.reference,
     })), [ussdTransfers]);
 
   return {activity, pendingUssdActivity, ussdSignatures, loading, refresh};

@@ -1,3 +1,4 @@
+import {createPrivateKey, createPublicKey} from 'node:crypto';
 import type {AppConfig} from './config.js';
 
 export interface AuthorizationKeyProvider {
@@ -8,6 +9,24 @@ type EnvironmentKeyring = {
   environment: AppConfig['environment'];
   keys: Record<string, string>;
 };
+
+const authorizationKeyPrefixes = ['wallet-auth:', 'wallet-api:'];
+
+export function authorizationPublicKeyFromPrivateKey(value: string) {
+  const stripped = authorizationKeyPrefixes.reduce(
+    (key, prefix) => key.startsWith(prefix) ? key.slice(prefix.length) : key,
+    value.trim(),
+  );
+  try {
+    const privateKey = createPrivateKey({key: Buffer.from(stripped, 'base64'), format: 'der', type: 'pkcs8'});
+    if (privateKey.asymmetricKeyType !== 'ec' || privateKey.asymmetricKeyDetails?.namedCurve !== 'prime256v1') {
+      throw new Error('wrong curve');
+    }
+    return createPublicKey(privateKey).export({format: 'der', type: 'spki'}).toString('base64');
+  } catch {
+    throw new Error('Privy authorization key must be a base64 PKCS8 P-256 private key.');
+  }
+}
 
 export class EnvironmentKeyringProvider implements AuthorizationKeyProvider {
   constructor(private readonly config: AppConfig) {}
@@ -20,6 +39,7 @@ export class EnvironmentKeyringProvider implements AuthorizationKeyProvider {
       if (!this.config.privyAuthorizationPrivateKey) {
         throw new Error('No Privy authorization key is configured.');
       }
+      authorizationPublicKeyFromPrivateKey(this.config.privyAuthorizationPrivateKey);
       return [this.config.privyAuthorizationPrivateKey];
     }
 
@@ -37,6 +57,7 @@ export class EnvironmentKeyringProvider implements AuthorizationKeyProvider {
     if (keys.length === 0 || keys.some((key) => typeof key !== 'string' || key.length === 0)) {
       throw new Error('Every active Privy authorization key ID must exist in the environment keyring.');
     }
+    keys.forEach(authorizationPublicKeyFromPrivateKey);
     return keys;
   }
 }

@@ -15,6 +15,7 @@ import {
   type DemoPaymentKind,
 } from './payment-providers/index.js';
 import {attestWalletSecurity} from './privy-security.js';
+import {isDefinitiveTransferFailure, privyFailureCategory, reconcilePrivyTransaction} from './privy-transaction-reconciliation.js';
 import {authorizeSessionAnswer, hashUssdHistory} from './security-state.js';
 import {isAuthenticUssdCallback} from './ussd-auth.js';
 import {formatNairaMinor, formatSolBalance, formatWalletAddress, parseNairaAmount, parseSolAmount, safeErrorMessage, textResponse, validatePhoneCountry, validateSolanaAddress} from './utils.js';
@@ -555,9 +556,39 @@ async function executeAuthorizedSolTransfer(
     const recipientLabel = session.recipient_phone_number ?? formatWalletAddress(recipientWalletAddress);
     return reply('END', transferSuccessMessage(formatLamportsForReceipt(amountLamports), recipientLabel, signature));
   } catch (error) {
+    let reconciliation: Awaited<ReturnType<typeof reconcilePrivyTransaction>> = null;
+    try {
+      reconciliation = await reconcilePrivyTransaction(referenceId);
+    } catch {
+      // Reconciliation is best-effort here. The dashboard repeats this safe,
+      // read-only lookup later, while the original idempotency key prevents a
+      // duplicate operation at Privy.
+    }
+    if (reconciliation) {
+      const {error: persistenceError} = await supabase.from('ussd_transfers').update({
+        status: reconciliation.status,
+        signature: reconciliation.signature,
+        error_message: reconciliation.status === 'failed' ? 'privy_transaction_failed' : null,
+      }).eq('id', reservation.id);
+      if (persistenceError) console.error('Could not persist reconciled transfer state.');
+      if (reconciliation.status === 'failed') {
+        return reply('END', 'Error: Transfer failed. No SOL was delivered.');
+      }
+      if (reconciliation.signature) {
+        const recipientLabel = session.recipient_phone_number ?? formatWalletAddress(recipientWalletAddress);
+        return reply('END', transferSubmittedMessage(
+          formatLamportsForReceipt(amountLamports),
+          recipientLabel,
+          reconciliation.signature,
+        ));
+      }
+    }
+    const definitiveFailure = isDefinitiveTransferFailure(error);
+    const failureCategory = privyFailureCategory(error);
     await supabase.from('ussd_transfers')
-      .update({status: 'unknown', error_message: safeErrorMessage(error).slice(0, 500)}).eq('id', reservation.id);
-    console.error('Solana transfer failed:', safeErrorMessage(error));
+      .update({status: definitiveFailure ? 'failed' : 'unknown', error_message: failureCategory}).eq('id', reservation.id);
+    console.error('Solana transfer failed:', failureCategory);
+    if (definitiveFailure) return reply('END', 'Error: Transfer rejected. No SOL was sent.');
     return reply('END', 'Error: Transfer status is uncertain. Do not retry; check your wallet.');
   }
 }
@@ -737,6 +768,10 @@ function formatLamportsForReceipt(lamports: bigint) {
 
 function transferSuccessMessage(amount: string, recipient: string, signature: string) {
   return `Transfer Confirmed! Sent ${amount} SOL to ${recipient}. Signature: ${signature.slice(0, 10)}...`;
+}
+
+function transferSubmittedMessage(amount: string, recipient: string, signature: string) {
+  return `Transfer submitted! Sent ${amount} SOL to ${recipient}. Signature: ${signature.slice(0, 10)}...`;
 }
 
 function walletMessage(walletAddress: string | null | undefined, message: string) {

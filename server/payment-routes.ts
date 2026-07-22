@@ -2,6 +2,7 @@ import {Router} from 'express';
 import rateLimit from 'express-rate-limit';
 import {supabase} from './clients.js';
 import {authenticateRequest} from './profile-routes.js';
+import {reconcilePrivyTransaction} from './privy-transaction-reconciliation.js';
 import {safeErrorMessage} from './utils.js';
 
 export const paymentRouter = Router();
@@ -30,11 +31,34 @@ paymentRouter.get('/history', rateLimit({
         .select('id, payment_kind, description, amount_minor, currency, reference, status, channel, processing_time, created_at, completed_at')
         .eq('profile_id', profile.id).order('created_at', {ascending: false}).limit(50),
       supabase.from('ussd_transfers')
-        .select('id, signature, status, amount_lamports, recipient_phone_number, recipient_wallet_address, created_at')
+        .select('id, reference_id, signature, status, amount_lamports, recipient_phone_number, recipient_wallet_address, created_at')
         .eq('sender_profile_id', profile.id).order('created_at', {ascending: false}).limit(50),
     ]);
     if (demoResult.error) throw demoResult.error;
     if (ussdResult.error) throw ussdResult.error;
+    const transferRows = ussdResult.data ?? [];
+    const reconcilableIds = new Set(transferRows
+      .filter((transfer) => !transfer.signature && ['processing', 'unknown'].includes(transfer.status))
+      .slice(0, 5)
+      .map((transfer) => transfer.id));
+    const ussdTransfers = await Promise.all(transferRows.map(async (transfer) => {
+      if (!reconcilableIds.has(transfer.id)) return transfer;
+      try {
+        const reconciled = await reconcilePrivyTransaction(transfer.reference_id);
+        if (!reconciled) return transfer;
+        const {error: updateError} = await supabase.from('ussd_transfers').update({
+          status: reconciled.status,
+          signature: reconciled.signature,
+          error_message: reconciled.status === 'failed' ? 'privy_transaction_failed' : null,
+        }).eq('id', transfer.id).eq('sender_profile_id', profile.id);
+        return updateError ? transfer : {...transfer, status: reconciled.status, signature: reconciled.signature};
+      } catch {
+        // History remains available even if Privy's reconciliation API is
+        // temporarily unavailable. A future refresh will retry the safe read.
+        return transfer;
+      }
+    }));
+
     return response.json({transactions: (demoResult.data ?? []).map((transaction) => ({
       id: transaction.id,
       paymentKind: transaction.payment_kind,
@@ -47,8 +71,9 @@ paymentRouter.get('/history', rateLimit({
       processingTime: transaction.processing_time,
       createdAt: transaction.created_at,
       completedAt: transaction.completed_at,
-    })), ussdTransfers: (ussdResult.data ?? []).map((transfer) => ({
+    })), ussdTransfers: ussdTransfers.map((transfer) => ({
       id: transfer.id,
+      reference: transfer.reference_id,
       signature: transfer.signature,
       status: transfer.status,
       amountLamports: String(transfer.amount_lamports),

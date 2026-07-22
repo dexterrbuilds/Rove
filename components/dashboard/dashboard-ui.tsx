@@ -219,14 +219,19 @@ function activityBadges(activity: WalletActivity) {
   if (activity.activityType === 'demo' || activity.source === 'demo') {
     badges.push({label: 'Demo', tone: 'demo'});
   } else {
-    badges.push({label: 'On-chain', tone: 'onchain'});
+    if (isSolanaTransactionSignature(activity.signature)) badges.push({label: 'On-chain', tone: 'onchain'});
     if (activity.source === 'ussd') badges.push({label: 'USSD', tone: 'ussd'});
     else if (activity.source === 'dashboard') badges.push({label: 'Dashboard', tone: 'dashboard'});
     else badges.push({label: activity.direction === 'received' ? 'Received' : 'Sent', tone: activity.direction});
   }
   if (activity.status === 'pending') badges.push({label: 'Pending', tone: 'pending'});
   if (activity.status === 'failed') badges.push({label: 'Failed', tone: 'failed'});
+  if (activity.status === 'uncertain') badges.push({label: 'Uncertain', tone: 'uncertain'});
   return badges;
+}
+
+function isSolanaTransactionSignature(value: string) {
+  return /^[1-9A-HJ-NP-Za-km-z]{80,100}$/.test(value);
 }
 
 function explorerTransactionUrl(signature: string, cluster: string) {
@@ -237,6 +242,8 @@ function explorerTransactionUrl(signature: string, cluster: string) {
 export function TransactionCard({activity, cluster}: {activity: WalletActivity; cluster: string}) {
   const received = activity.direction === 'received';
   const demo = activity.activityType === 'demo' || activity.source === 'demo';
+  const explorerSignature = isSolanaTransactionSignature(activity.signature) ? activity.signature : null;
+  const attempted = activity.status === 'failed' || activity.status === 'uncertain';
   const amount = activity.amount === null
     ? '—'
     : demo
@@ -250,17 +257,19 @@ export function TransactionCard({activity, cluster}: {activity: WalletActivity; 
         <span>{activity.timestamp ? new Intl.DateTimeFormat('en', {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}).format(activity.timestamp) : 'Time unavailable'}</span>
         {demo
           ? <small className="transaction-reference">Ref: {activity.reference}</small>
-          : <a href={explorerTransactionUrl(activity.signature, cluster)} target="_blank" rel="noreferrer">{activity.signature.slice(0, 6)}…{activity.signature.slice(-5)} <ExternalLink size={11} /></a>}
+          : explorerSignature
+            ? <a href={explorerTransactionUrl(explorerSignature, cluster)} target="_blank" rel="noreferrer">{explorerSignature.slice(0, 6)}…{explorerSignature.slice(-5)} <ExternalLink size={11} /></a>
+            : <small className="transaction-reference">Rove ref: {activity.reference?.slice(0, 12) ?? activity.signature.slice(5, 17)}… · No on-chain signature</small>}
       </div>
       <div className="transaction-amount">
-        <strong>{received ? '+' : '-'}{amount}</strong>
+        <strong>{attempted ? '' : received ? '+' : '-'}{amount}</strong>
         <div className="transaction-badges">{activityBadges(activity).map((badge) => <span className={`status-badge ${badge.tone}`} key={badge.label}>{badge.label}</span>)}</div>
       </div>
     </motion.article>
   );
 }
 
-export type ActivityFilter = 'all' | 'onchain' | 'ussd' | 'dashboard' | 'demo' | 'received' | 'sent' | 'pending';
+export type ActivityFilter = 'all' | 'onchain' | 'ussd' | 'dashboard' | 'demo' | 'received' | 'sent' | 'pending' | 'uncertain';
 const activityFilters: Array<{value: ActivityFilter; label: string}> = [
   {value: 'all', label: 'All'},
   {value: 'onchain', label: 'On-chain'},
@@ -270,6 +279,7 @@ const activityFilters: Array<{value: ActivityFilter; label: string}> = [
   {value: 'received', label: 'Received'},
   {value: 'sent', label: 'Sent'},
   {value: 'pending', label: 'Pending'},
+  {value: 'uncertain', label: 'Uncertain'},
 ];
 
 export function TransactionTimeline({activity, cluster, preview = false, loading = false}: {
@@ -282,8 +292,8 @@ export function TransactionTimeline({activity, cluster, preview = false, loading
   const filtered = activity.filter((entry) => {
     if (filter === 'all') return true;
     if (filter === 'received' || filter === 'sent') return entry.direction === filter;
-    if (filter === 'pending') return entry.status === 'pending';
-    if (filter === 'onchain') return entry.activityType !== 'demo' && entry.source !== 'demo';
+    if (filter === 'pending' || filter === 'uncertain') return entry.status === filter;
+    if (filter === 'onchain') return isSolanaTransactionSignature(entry.signature);
     return entry.source === filter;
   });
   const shown = preview ? filtered.slice(0, 4) : filtered;

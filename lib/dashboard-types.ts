@@ -19,7 +19,7 @@ export type WalletAsset = {
 };
 
 export type ActivityDirection = 'sent' | 'received';
-export type ActivityStatus = 'confirmed' | 'pending' | 'failed';
+export type ActivityStatus = 'confirmed' | 'pending' | 'failed' | 'uncertain';
 export type ActivitySource = 'ussd' | 'dashboard' | 'received' | 'onchain' | 'demo';
 
 export type WalletActivity = {
