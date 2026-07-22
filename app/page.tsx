@@ -19,6 +19,11 @@ type ProfileStatus =
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 const USSD_CODE = process.env.NEXT_PUBLIC_USSD_SHORTCODE ?? '*384*1234#';
+const SOLANA_CLUSTER = process.env.NEXT_PUBLIC_SOLANA_CLUSTER === 'mainnet'
+  ? 'mainnet'
+  : process.env.NEXT_PUBLIC_SOLANA_CLUSTER === 'testnet'
+    ? 'testnet'
+    : 'devnet';
 const PRIVY_SIGNER_ID = process.env.NEXT_PUBLIC_PRIVY_SIGNER_ID;
 const PRIVY_POLICY_IDS = (process.env.NEXT_PUBLIC_PRIVY_POLICY_IDS ?? '')
   .split(',')
@@ -34,6 +39,11 @@ function createActivationCode() {
 
 function shortenAddress(address: string) {
   return `${address.slice(0, 7)}···${address.slice(-7)}`;
+}
+
+function solanaExplorerAccountUrl(address: string) {
+  const cluster = SOLANA_CLUSTER === 'mainnet' ? '' : `?cluster=${SOLANA_CLUSTER}`;
+  return `https://explorer.solana.com/address/${address}${cluster}`;
 }
 
 function isValidInternationalPhone(value: string) {
@@ -280,7 +290,7 @@ export default function Home() {
       <header className="topbar">
         <Brand />
         <div className="topbar-actions">
-          <div className="network-pill"><i /> Solana mainnet</div>
+          <div className="network-pill"><i /> Solana {SOLANA_CLUSTER}</div>
           <button className="icon-button" onClick={logout} aria-label="Log out"><LogOut size={18} /></button>
         </div>
       </header>
@@ -477,8 +487,8 @@ function OfflineAccessReady({profile}: {profile: Extract<ProfileStatus, {status:
           {copied ? <Check size={16} /> : <Copy size={16} />} {copied ? 'Copied' : 'Copy code'}
         </button>
       </div>
-      <a className="explorer-link" href={`https://solscan.io/account/${profile.walletAddress}`} target="_blank" rel="noreferrer">
-        View wallet on Solscan <ExternalLink size={14} />
+      <a className="explorer-link" href={solanaExplorerAccountUrl(profile.walletAddress)} target="_blank" rel="noreferrer">
+        View wallet on Solana Explorer <ExternalLink size={14} />
       </a>
     </div>
   );
@@ -530,7 +540,7 @@ function SecurityUpgrade({
       <div className="success-icon"><ShieldCheck size={28} strokeWidth={2.5} /></div>
       <div className="step-label"><span>!</span> SECURITY UPGRADE</div>
       <h2>Secure offline access</h2>
-      <p className="lede">Before mainnet transactions, replace the legacy PIN and bind the delegated signer to Rove&apos;s restricted Privy policy.</p>
+      <p className="lede">Before offline transactions, replace the legacy PIN and bind the delegated signer to Rove&apos;s restricted Privy policy.</p>
       <form className="setup-form security-upgrade-form" onSubmit={upgrade}>
         <label>
           <span>New 6-digit transaction PIN</span>

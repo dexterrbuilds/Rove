@@ -56,7 +56,7 @@ services:
       - key: SOLANA_RPC_URL
         sync: false
       - key: SOLANA_CAIP2
-        value: solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp
+        value: solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1
 
   - type: web
     name: rove-web
@@ -77,3 +77,5 @@ services:
         sync: false
       - key: NEXT_PUBLIC_USSD_SHORTCODE
         sync: false
+      - key: NEXT_PUBLIC_SOLANA_CLUSTER
+        value: devnet
