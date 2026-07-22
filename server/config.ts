@@ -7,6 +7,9 @@ const schema = z.object({
   PRIVY_APP_ID: z.string().min(1),
   PRIVY_APP_SECRET: z.string().min(1),
   PRIVY_AUTHORIZATION_PRIVATE_KEY: z.string().min(1).optional(),
+  AFRICASTALKING_USSD_CALLBACK_TOKEN: z.string().min(32),
+  AFRICASTALKING_USSD_SERVICE_CODE: z.string().min(3),
+  AFRICASTALKING_USSD_ALLOWED_IPS: z.string().default(''),
   SOLANA_RPC_URL: z.string().url().default('https://api.mainnet-beta.solana.com'),
   SOLANA_CAIP2: z.enum([
     'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp',
@@ -22,6 +25,9 @@ export type AppConfig = {
   privyAppId: string;
   privyAppSecret: string;
   privyAuthorizationPrivateKey?: string;
+  africasTalkingUssdCallbackToken: string;
+  africasTalkingUssdServiceCode: string;
+  africasTalkingUssdAllowedIps: string[];
   solanaRpcUrl: string;
   solanaCaip2: z.infer<typeof schema>['SOLANA_CAIP2'];
   webOrigin: string;
@@ -38,6 +44,12 @@ export function getConfig(): AppConfig {
     privyAppId: env.PRIVY_APP_ID,
     privyAppSecret: env.PRIVY_APP_SECRET,
     privyAuthorizationPrivateKey: env.PRIVY_AUTHORIZATION_PRIVATE_KEY,
+    africasTalkingUssdCallbackToken: env.AFRICASTALKING_USSD_CALLBACK_TOKEN,
+    africasTalkingUssdServiceCode: env.AFRICASTALKING_USSD_SERVICE_CODE,
+    africasTalkingUssdAllowedIps: env.AFRICASTALKING_USSD_ALLOWED_IPS
+      .split(',')
+      .map((ip) => ip.trim().replace(/^::ffff:/, ''))
+      .filter(Boolean),
     solanaRpcUrl: env.SOLANA_RPC_URL,
     solanaCaip2: env.SOLANA_CAIP2,
     webOrigin: env.WEB_ORIGIN,

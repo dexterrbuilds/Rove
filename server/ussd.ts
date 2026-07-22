@@ -1,9 +1,10 @@
 import {createHash} from 'node:crypto';
-import {Router, type Response} from 'express';
+import {Router, type NextFunction, type Request, type Response} from 'express';
 import {PublicKey, SystemProgram, Transaction} from '@solana/web3.js';
 import {getConfig} from './config.js';
 import {privy, solana, supabase} from './clients.js';
 import {verifyPin} from './profile-routes.js';
+import {isAuthenticUssdCallback} from './ussd-auth.js';
 import {formatSolBalance, formatWalletAddress, normalizePhoneNumber, parseSolAmount, safeErrorMessage, textResponse} from './utils.js';
 
 type Profile = {
@@ -18,7 +19,27 @@ type Profile = {
 
 export const ussdRouter = Router();
 
-ussdRouter.post('/ussd-blockchain', async (request, response) => {
+// Africa's Talking does not document a cryptographic signature for USSD callbacks.
+// Require an independent bearer token in the configured callback URL and optionally
+// restrict requests to source IPs confirmed directly with Africa's Talking support.
+function authenticateUssdCallback(request: Request, response: Response, next: NextFunction) {
+  const config = getConfig();
+  const suppliedToken = typeof request.query.at_token === 'string' ? request.query.at_token : '';
+  const sourceIp = String(request.ip || request.socket.remoteAddress || '').replace(/^::ffff:/, '');
+  if (!isAuthenticUssdCallback({
+    suppliedToken,
+    expectedToken: config.africasTalkingUssdCallbackToken,
+    suppliedServiceCode: String(request.body.serviceCode ?? ''),
+    expectedServiceCode: config.africasTalkingUssdServiceCode,
+    sourceIp,
+    allowedIps: config.africasTalkingUssdAllowedIps,
+  })) {
+    return response.status(403).type('text/plain').send('END Unauthorized USSD request.');
+  }
+  return next();
+}
+
+ussdRouter.post('/ussd-blockchain', authenticateUssdCallback, async (request, response) => {
   response.status(200).type('text/plain');
 
   try {

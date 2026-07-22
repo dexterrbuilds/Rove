@@ -21,6 +21,12 @@ services:
         sync: false
       - key: PRIVY_AUTHORIZATION_PRIVATE_KEY
         sync: false
+      - key: AFRICASTALKING_USSD_CALLBACK_TOKEN
+        sync: false
+      - key: AFRICASTALKING_USSD_SERVICE_CODE
+        sync: false
+      - key: AFRICASTALKING_USSD_ALLOWED_IPS
+        sync: false
       - key: SOLANA_RPC_URL
         sync: false
       - key: SOLANA_CAIP2
