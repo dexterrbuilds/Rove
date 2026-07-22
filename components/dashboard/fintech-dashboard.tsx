@@ -217,7 +217,7 @@ export function FintechDashboard({
             {view === 'ussd' && (
               <ViewTransition view={view}>
                 <PageHeading eyebrow="Works without data" title="USSD access" description="Manage the phone connection that lets you reach Rove from any handset." />
-                <div className="page-grid"><USSDCard phoneNumber={phoneNumber} shortcode={shortcode} secure={secure} onCopy={() => void copyShortcode()} onReconnect={reconnectPhone} /><section className="feature-card dial-card"><span className="feature-icon green"><Smartphone size={21} /></span><span className="card-kicker">Ready when you are</span><h2>Banking that works offline.</h2><p>Dial from your linked phone, choose an action, and approve transfers with your six-digit PIN.</p><a className="primary-action" href={`tel:${shortcode.replace('#', '%23')}`}><Smartphone size={17} /> Dial {shortcode}</a><div className="ussd-flow"><div><span>1</span><p><strong>Dial</strong><small>Open the service menu</small></p></div><div><span>2</span><p><strong>Choose</strong><small>Balance or send SOL</small></p></div><div><span>3</span><p><strong>Approve</strong><small>Enter your private PIN</small></p></div></div></section></div>
+                <div className="page-grid"><USSDCard phoneNumber={phoneNumber} shortcode={shortcode} secure={secure} onCopy={() => void copyShortcode()} onReconnect={reconnectPhone} /><section className="feature-card dial-card"><span className="feature-icon green"><Smartphone size={21} /></span><span className="card-kicker">Ready when you are</span><h2>Banking that works offline.</h2><p>Dial from your linked phone, send to a phone number or Solana address, and approve with your six-digit PIN.</p><a className="primary-action" href={`tel:${shortcode.replace('#', '%23')}`}><Smartphone size={17} /> Dial {shortcode}</a><div className="ussd-flow"><div><span>1</span><p><strong>Dial</strong><small>Open the service menu</small></p></div><div><span>2</span><p><strong>Choose</strong><small>Enter a phone or wallet</small></p></div><div><span>3</span><p><strong>Approve</strong><small>Enter your private PIN</small></p></div></div></section></div>
               </ViewTransition>
             )}
 
@@ -230,7 +230,7 @@ export function FintechDashboard({
 
             {view === 'send' && (
               <ViewTransition view={view}>
-                <PageHeading eyebrow="Transfer" title="Send SOL" description="Prepare a secure offline transfer to another registered Rove user." />
+                <PageHeading eyebrow="Transfer" title="Send SOL" description="Prepare a secure offline transfer to a Rove phone number or any Solana address." />
                 <div className="single-panel"><SendPanel balance={portfolio.solBalance} shortcode={shortcode} onOpenUssd={() => selectView('ussd')} /></div>
               </ViewTransition>
             )}

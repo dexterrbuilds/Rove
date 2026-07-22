@@ -495,7 +495,7 @@ function OfflineAccessReady({profile}: {profile: Extract<ProfileStatus, {status:
       <div className="ready-callout">
         <span>Dial from your linked phone</span>
         <strong>{USSD_CODE}</strong>
-        <p>Check your SOL balance or send SOL to another registered number—no mobile data needed.</p>
+        <p>Check your SOL balance or send SOL to a registered number or Solana address—no mobile data needed.</p>
       </div>
       <div className="activation-actions">
         <a className="primary-button" href={`tel:${USSD_CODE.replace('#', '%23')}`}><Smartphone size={17} /> Dial now</a>

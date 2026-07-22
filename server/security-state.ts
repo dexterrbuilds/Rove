@@ -29,8 +29,8 @@ export function authorizeSessionAnswer(
 }
 
 export function transactionBindingMatches(input: {
-  authorization: {sessionId: string; senderId: string; recipientId: string; amountLamports: bigint; expiresAt: number; consumed: boolean};
-  request: {sessionId: string; senderId: string; recipientId: string; amountLamports: bigint; now?: number};
+  authorization: {sessionId: string; senderId: string; recipientProfileId: string | null; recipientWalletAddress: string; amountLamports: bigint; expiresAt: number; consumed: boolean};
+  request: {sessionId: string; senderId: string; recipientProfileId: string | null; recipientWalletAddress: string; amountLamports: bigint; now?: number};
 }) {
   const now = input.request.now ?? Date.now();
   const auth = input.authorization;
@@ -38,6 +38,7 @@ export function transactionBindingMatches(input: {
     && auth.expiresAt > now
     && auth.sessionId === input.request.sessionId
     && auth.senderId === input.request.senderId
-    && auth.recipientId === input.request.recipientId
+    && auth.recipientProfileId === input.request.recipientProfileId
+    && auth.recipientWalletAddress === input.request.recipientWalletAddress
     && auth.amountLamports === input.request.amountLamports;
 }

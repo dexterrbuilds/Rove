@@ -3,6 +3,7 @@
 import {useMemo, useState} from 'react';
 import {AnimatePresence, motion} from 'framer-motion';
 import {QRCodeSVG} from 'qrcode.react';
+import {PublicKey} from '@solana/web3.js';
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -342,7 +343,14 @@ export function SendPanel({balance, shortcode, onOpenUssd}: {balance: number; sh
   const [amount, setAmount] = useState('');
   const [reviewing, setReviewing] = useState(false);
   const amountNumber = Number(amount);
-  const valid = /^\+[1-9]\d{7,14}$/.test(recipient) && Number.isFinite(amountNumber) && amountNumber > 0 && amountNumber < balance;
+  let walletAddressIsValid = false;
+  try {
+    walletAddressIsValid = new PublicKey(recipient).toBase58() === recipient;
+  } catch {
+    walletAddressIsValid = false;
+  }
+  const recipientIsValid = /^\+[1-9]\d{7,14}$/.test(recipient) || walletAddressIsValid;
+  const valid = recipientIsValid && Number.isFinite(amountNumber) && amountNumber > 0 && amountNumber < balance;
   return (
     <motion.section className="send-panel feature-card" {...cardMotion}>
       <div className="panel-heading"><span className="feature-icon green"><Send size={21} /></span><div><span className="card-kicker">Send securely</span><h2>Prepare a SOL transfer</h2><p>Rove authorizes transfers with your PIN over USSD.</p></div></div>
@@ -363,7 +371,7 @@ export function SendPanel({balance, shortcode, onOpenUssd}: {balance: number; sh
           </motion.div>
         ) : (
           <motion.div className="send-form" key="form" initial={{opacity: 0, x: -12}} animate={{opacity: 1, x: 0}} exit={{opacity: 0, x: 10}}>
-            <label><span>Recipient phone</span><div className="premium-input"><Phone size={17} /><input value={recipient} onChange={(event) => setRecipient(event.target.value.replace(/[\s()-]/g, ''))} placeholder="+234 801 234 5678" inputMode="tel" /></div></label>
+            <label><span>Recipient phone or wallet address</span><div className="premium-input"><Phone size={17} /><input value={recipient} onChange={(event) => setRecipient(event.target.value.replace(/[\s()-]/g, ''))} placeholder="+234… or Solana address" inputMode="text" autoCapitalize="none" autoCorrect="off" spellCheck={false} /></div></label>
             <label><span>Token</span><div className="premium-input token-selector"><span className="mini-sol-logo">S</span><select aria-label="Token" value="SOL" disabled><option value="SOL">Solana (SOL)</option></select><small>USSD supported</small></div></label>
             <label><span>Amount</span><div className="premium-input amount-input"><input value={amount} onChange={(event) => setAmount(event.target.value.replace(/[^\d.]/g, ''))} placeholder="0.00" inputMode="decimal" /><strong>SOL</strong></div></label>
             <div className="send-details"><div><span>Available</span><strong>{formatTokenAmount(balance)} SOL</strong></div><div><span>Estimated network fee</span><strong>≈ 0.000005 SOL</strong></div><div><span>Authorization</span><strong>6-digit PIN via USSD</strong></div></div>

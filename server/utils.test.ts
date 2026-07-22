@@ -1,5 +1,6 @@
 import {describe, expect, it} from 'vitest';
-import {formatSolBalance, formatWalletAddress, normalizePhoneNumber, parseSolAmount, redactSensitive, textResponse, validatePhoneCountry} from './utils.js';
+import {Keypair} from '@solana/web3.js';
+import {formatSolBalance, formatWalletAddress, normalizePhoneNumber, parseSolAmount, redactSensitive, textResponse, validatePhoneCountry, validateSolanaAddress} from './utils.js';
 
 describe('normalizePhoneNumber', () => {
   it('normalizes safe international formatting', () => {
@@ -16,6 +17,13 @@ describe('normalizePhoneNumber', () => {
 it('enforces configured phone countries', () => {
   expect(validatePhoneCountry('+2348012345678', ['NG'])?.countryCode).toBe('NG');
   expect(validatePhoneCountry('+254712345678', ['NG'])).toBeNull();
+});
+
+it('accepts canonical Solana addresses and rejects malformed destinations', () => {
+  const address = Keypair.generate().publicKey.toBase58();
+  expect(validateSolanaAddress(address)).toBe(address);
+  expect(validateSolanaAddress('not-a-solana-address')).toBeNull();
+  expect(validateSolanaAddress(`${address}extra`)).toBeNull();
 });
 
 describe('parseSolAmount', () => {

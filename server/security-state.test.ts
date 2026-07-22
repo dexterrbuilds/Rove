@@ -30,10 +30,11 @@ describe('authoritative USSD sessions', () => {
 });
 
 it('rejects transaction authorization replay and binding changes', () => {
-  const authorization = {sessionId: 's1', senderId: 'a', recipientId: 'b', amountLamports: 10n, expiresAt: now + 1_000, consumed: false};
-  const request = {sessionId: 's1', senderId: 'a', recipientId: 'b', amountLamports: 10n, now};
+  const authorization = {sessionId: 's1', senderId: 'a', recipientProfileId: null, recipientWalletAddress: 'wallet-b', amountLamports: 10n, expiresAt: now + 1_000, consumed: false};
+  const request = {sessionId: 's1', senderId: 'a', recipientProfileId: null, recipientWalletAddress: 'wallet-b', amountLamports: 10n, now};
   expect(transactionBindingMatches({authorization, request})).toBe(true);
   expect(transactionBindingMatches({authorization: {...authorization, consumed: true}, request})).toBe(false);
   expect(transactionBindingMatches({authorization, request: {...request, amountLamports: 11n}})).toBe(false);
+  expect(transactionBindingMatches({authorization, request: {...request, recipientWalletAddress: 'attacker-wallet'}})).toBe(false);
   expect(transactionBindingMatches({authorization, request: {...request, now: now + 2_000}})).toBe(false);
 });

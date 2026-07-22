@@ -1,4 +1,5 @@
 import {parsePhoneNumberFromString} from 'libphonenumber-js/min';
+import {PublicKey} from '@solana/web3.js';
 
 const LAMPORTS_PER_SOL_BIGINT = 1_000_000_000n;
 const MAX_TRANSFER_LAMPORTS = 1_000n * LAMPORTS_PER_SOL_BIGINT;
@@ -16,6 +17,17 @@ export function validatePhoneCountry(value: string, allowedCountryCodes: string[
   const parsed = parsePhoneNumberFromString(normalized);
   if (!parsed?.country || !allowedCountryCodes.includes(parsed.country)) return null;
   return {phoneNumber: parsed.number, countryCode: parsed.country};
+}
+
+export function validateSolanaAddress(value: string) {
+  const candidate = value.trim();
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(candidate)) return null;
+  try {
+    const address = new PublicKey(candidate).toBase58();
+    return address === candidate ? address : null;
+  } catch {
+    return null;
+  }
 }
 
 export function parseSolAmount(value: string, configuredMaximumSol?: string) {

@@ -8,7 +8,7 @@ import {createPinMaterial} from './pin-security.js';
 import {attestWalletSecurity} from './privy-security.js';
 import {authorizeSessionAnswer, hashUssdHistory} from './security-state.js';
 import {isAuthenticUssdCallback} from './ussd-auth.js';
-import {formatSolBalance, formatWalletAddress, parseSolAmount, safeErrorMessage, textResponse, validatePhoneCountry} from './utils.js';
+import {formatSolBalance, formatWalletAddress, parseSolAmount, safeErrorMessage, textResponse, validatePhoneCountry, validateSolanaAddress} from './utils.js';
 
 type Profile = {
   id: string;
@@ -31,6 +31,7 @@ type UssdSession = {
   history_hash: string;
   recipient_profile_id: string | null;
   recipient_phone_number: string | null;
+  recipient_wallet_address: string | null;
   amount_lamports: number | string | null;
   expires_at: string;
   consumed_at: string | null;
@@ -238,26 +239,46 @@ async function handleLinkedSession(profile: Profile, session: UssdSession, answe
       return reply('END', 'Error: Invalid menu selection.');
     }
     const advanced = await advanceSession(session, 'recipient', 1, fullText, {});
-    return advanced ? reply('CON', 'Enter Recipient Phone Number:') : reply('END', 'Error: Session expired. Redial to start again.');
+    return advanced ? reply('CON', 'Enter recipient phone number or Solana wallet address:') : reply('END', 'Error: Session expired. Redial to start again.');
   }
 
   if (session.current_step === 'recipient') {
     const recipientPhone = validatePhoneCountry(answer, config.africasTalkingAllowedCountryCodes);
-    if (!recipientPhone || recipientPhone.phoneNumber === profile.phone_number) {
-      await consumeSession(session.id);
-      return reply('END', 'Error: Enter a valid registered recipient phone number.');
-    }
-    const recipient = await findLinkedProfile(recipientPhone.phoneNumber);
-    if (!recipient) {
-      await consumeSession(session.id);
-      return reply('END', 'Error: Recipient phone number is not registered.');
+    let recipientProfileId: string | null = null;
+    let recipientPhoneNumber: string | null = null;
+    let recipientWalletAddress: string | null = null;
+    if (recipientPhone) {
+      if (recipientPhone.phoneNumber === profile.phone_number) {
+        await consumeSession(session.id);
+        return reply('END', 'Error: You cannot send to your own linked phone number.');
+      }
+      const recipient = await findLinkedProfile(recipientPhone.phoneNumber);
+      if (!recipient) {
+        await consumeSession(session.id);
+        return reply('END', 'Error: Recipient phone number is not registered. Enter a Solana address instead.');
+      }
+      recipientProfileId = recipient.id;
+      recipientPhoneNumber = recipientPhone.phoneNumber;
+      recipientWalletAddress = recipient.solana_wallet_address;
+    } else {
+      recipientWalletAddress = validateSolanaAddress(answer);
+      if (!recipientWalletAddress) {
+        await consumeSession(session.id);
+        return reply('END', 'Error: Enter a valid phone number or Solana wallet address.');
+      }
+      if (recipientWalletAddress === profile.solana_wallet_address) {
+        await consumeSession(session.id);
+        return reply('END', 'Error: You cannot send to your own wallet address.');
+      }
     }
     const advanced = await advanceSession(session, 'amount', 2, fullText, {
-      recipient_profile_id: recipient.id,
-      recipient_phone_number: recipientPhone.phoneNumber,
+      recipient_profile_id: recipientProfileId,
+      recipient_phone_number: recipientPhoneNumber,
+      recipient_wallet_address: recipientWalletAddress,
     });
+    const recipientLabel = recipientPhoneNumber ?? formatWalletAddress(recipientWalletAddress);
     return advanced
-      ? reply('CON', `To: ${recipientPhone.phoneNumber}\nEnter amount to transfer (SOL):`)
+      ? reply('CON', `To: ${recipientLabel}\nEnter amount to transfer (SOL):`)
       : reply('END', 'Error: Session expired. Redial to start again.');
   }
 
@@ -268,8 +289,10 @@ async function handleLinkedSession(profile: Profile, session: UssdSession, answe
       return reply('END', `Error: Enter an amount up to ${config.maxTransferSol} SOL.`);
     }
     const advanced = await advanceSession(session, 'pin', 3, fullText, {amount_lamports: lamports.toString()});
+    const recipientLabel = session.recipient_phone_number
+      ?? (session.recipient_wallet_address ? formatWalletAddress(session.recipient_wallet_address) : 'recipient');
     return advanced
-      ? reply('CON', `Send ${answer} SOL to ${session.recipient_phone_number}\nEnter your 6-Digit PIN to authorize:`)
+      ? reply('CON', `Send ${answer} SOL to ${recipientLabel}\nEnter your 6-Digit PIN to authorize:`)
       : reply('END', 'Error: Session expired. Redial to start again.');
   }
 
@@ -304,20 +327,25 @@ async function handleLinkedSession(profile: Profile, session: UssdSession, answe
   }
 
   const amountLamports = BigInt(String(session.amount_lamports));
-  if (!session.recipient_profile_id || !session.recipient_phone_number || amountLamports <= 0n) {
+  const recipientWalletAddress = validateSolanaAddress(session.recipient_wallet_address ?? '');
+  if (!recipientWalletAddress || amountLamports <= 0n
+      || Boolean(session.recipient_profile_id) !== Boolean(session.recipient_phone_number)) {
     await consumeSession(session.id);
     return reply('END', 'Error: Incomplete transaction session.');
   }
-  const {data: recipient, error: recipientError} = await supabase
-    .from('profiles')
-    .select('id, solana_wallet_address')
-    .eq('id', session.recipient_profile_id)
-    .eq('phone_number', session.recipient_phone_number)
-    .maybeSingle<{id: string; solana_wallet_address: string}>();
-  if (recipientError) throw recipientError;
-  if (!recipient) {
-    await consumeSession(session.id);
-    return reply('END', 'Error: Recipient phone number is no longer registered.');
+  if (session.recipient_profile_id && session.recipient_phone_number) {
+    const {data: recipient, error: recipientError} = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('id', session.recipient_profile_id)
+      .eq('phone_number', session.recipient_phone_number)
+      .eq('solana_wallet_address', recipientWalletAddress)
+      .maybeSingle<{id: string}>();
+    if (recipientError) throw recipientError;
+    if (!recipient) {
+      await consumeSession(session.id);
+      return reply('END', 'Error: Recipient profile changed. Redial and verify the destination.');
+    }
   }
 
   await attestWalletSecurity({
@@ -336,7 +364,8 @@ async function handleLinkedSession(profile: Profile, session: UssdSession, answe
     nonce,
     session_id: session.id,
     sender_profile_id: profile.id,
-    recipient_profile_id: recipient.id,
+    recipient_profile_id: session.recipient_profile_id,
+    recipient_wallet_address: recipientWalletAddress,
     amount_lamports: amountLamports.toString(),
     expires_at: authorizationExpiry,
   });
@@ -346,7 +375,8 @@ async function handleLinkedSession(profile: Profile, session: UssdSession, answe
     p_nonce: nonce,
     p_session_id: session.id,
     p_sender_profile_id: profile.id,
-    p_recipient_profile_id: recipient.id,
+    p_recipient_profile_id: session.recipient_profile_id,
+    p_recipient_wallet_address: recipientWalletAddress,
     p_amount_lamports: amountLamports.toString(),
   });
   const authorizationId = Array.isArray(consumedAuth) ? consumedAuth[0]?.authorization_id as string | undefined : undefined;
@@ -360,8 +390,9 @@ async function handleLinkedSession(profile: Profile, session: UssdSession, answe
     reference_id: referenceId,
     authorization_id: authorizationId,
     sender_profile_id: profile.id,
-    recipient_profile_id: recipient.id,
+    recipient_profile_id: session.recipient_profile_id,
     recipient_phone_number: session.recipient_phone_number,
+    recipient_wallet_address: recipientWalletAddress,
     amount_lamports: amountLamports.toString(),
     status: 'processing',
   }).select('id').single<{id: string}>();
@@ -371,14 +402,15 @@ async function handleLinkedSession(profile: Profile, session: UssdSession, answe
     const signature = await sendSolTransfer({
       walletId: profile.privy_wallet_id,
       fromAddress: profile.solana_wallet_address,
-      toAddress: recipient.solana_wallet_address,
+      toAddress: recipientWalletAddress,
       lamports: amountLamports,
       referenceId,
     });
     const {error: persistenceError} = await supabase.from('ussd_transfers')
       .update({status: 'confirmed', signature}).eq('id', reservation.id);
     if (persistenceError) console.error('Could not persist confirmed transfer:', safeErrorMessage(persistenceError));
-    return reply('END', transferSuccessMessage(formatLamportsForReceipt(amountLamports), session.recipient_phone_number, signature));
+    const recipientLabel = session.recipient_phone_number ?? formatWalletAddress(recipientWalletAddress);
+    return reply('END', transferSuccessMessage(formatLamportsForReceipt(amountLamports), recipientLabel, signature));
   } catch (error) {
     await supabase.from('ussd_transfers')
       .update({status: 'unknown', error_message: safeErrorMessage(error).slice(0, 500)})
@@ -393,7 +425,7 @@ async function advanceSession(
   nextStep: UssdSession['current_step'],
   expectedSegments: number,
   fullText: string,
-  values: Record<string, string>,
+  values: Record<string, string | null>,
 ) {
   const {data, error} = await supabase.from('ussd_sessions').update({
     current_step: nextStep,
@@ -450,8 +482,8 @@ function formatLamportsForReceipt(lamports: bigint) {
   return fraction ? `${whole}.${fraction}` : whole.toString();
 }
 
-function transferSuccessMessage(amount: string, recipientPhone: string, signature: string) {
-  return `Transfer Confirmed! Sent ${amount} SOL to ${recipientPhone}. Signature: ${signature.slice(0, 10)}...`;
+function transferSuccessMessage(amount: string, recipient: string, signature: string) {
+  return `Transfer Confirmed! Sent ${amount} SOL to ${recipient}. Signature: ${signature.slice(0, 10)}...`;
 }
 
 function walletMessage(walletAddress: string | null | undefined, message: string) {

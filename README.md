@@ -17,7 +17,7 @@ Rove bridges that gap by making a Solana wallet accessible through a familiar, s
 1. **Create a wallet** — The user signs in with email, Google, or SMS and receives a Privy-powered embedded Solana wallet.
 2. **Link a phone** — The user chooses a four-digit transaction PIN and receives a short-lived activation code.
 3. **Activate through USSD** — Dialing the Rove shortcode from the registered phone links that number to the wallet.
-4. **Transact offline** — The user can redial the shortcode to check their on-chain balance or send SOL to another registered phone number.
+4. **Transact offline** — The user can redial the shortcode to check their on-chain balance or send SOL to a registered phone number or any valid Solana address.
 
 ```text
 Web3 Assistant
