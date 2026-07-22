@@ -1,5 +1,5 @@
 import type {Wallet} from '@privy-io/node';
-import {authorizationKeyProvider, privy} from './clients.js';
+import {authorizationKeyProvider, privy, solana} from './clients.js';
 import {authorizationPublicKeyFromPrivateKey} from './authorization-key-provider.js';
 import {getConfig} from './config.js';
 import {assertRestrictedSolanaTransferPolicy, assertWalletSecurityConfiguration, type WalletIdentity} from './wallet-security.js';
@@ -42,17 +42,25 @@ export async function findOwnedSolanaWallet(privyUserId: string, walletAddress: 
 
 export async function validatePrivyStartupSecurity() {
   const config = getConfig();
-  const [policy, quorum, keys] = await Promise.all([
+  const [policy, quorum, keys, genesisHash] = await Promise.all([
     privy.policies().get(config.privyPolicyId),
     privy.keyQuorums().get(config.privySignerId),
     authorizationKeyProvider.getAuthorizationPrivateKeys(),
+    solana.getGenesisHash(),
   ]);
   if (policy.id !== config.privyPolicyId) throw new Error('Configured Privy policy could not be verified.');
   assertRestrictedSolanaTransferPolicy(policy, config.maxTransferSol);
   if (quorum.id !== config.privySignerId) throw new Error('Configured Privy signer quorum could not be verified.');
   if (keys.length === 0) throw new Error('No active Privy authorization key is available.');
   const quorumPublicKeys = new Set(quorum.authorization_keys.map((key) => key.public_key.replace(/\s/g, '')));
-  if (keys.some((key) => !quorumPublicKeys.has(authorizationPublicKeyFromPrivateKey(key).replace(/\s/g, '')))) {
+  const activePublicKeys = keys.map((key) => authorizationPublicKeyFromPrivateKey(key).replace(/\s/g, ''));
+  if (activePublicKeys.some((key) => !quorumPublicKeys.has(key))) {
     throw new Error('An active Privy authorization private key is not registered in PRIVY_SIGNER_ID.');
+  }
+  if (new Set(activePublicKeys).size < (quorum.authorization_threshold ?? 1)) {
+    throw new Error('Active Privy authorization keys do not satisfy the signer quorum threshold.');
+  }
+  if (`solana:${genesisHash}` !== config.solanaCaip2) {
+    throw new Error('SOLANA_RPC_URL and SOLANA_CAIP2 refer to different Solana networks.');
   }
 }

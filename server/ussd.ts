@@ -585,9 +585,10 @@ async function executeAuthorizedSolTransfer(
     }
     const definitiveFailure = isDefinitiveTransferFailure(error);
     const failureCategory = privyFailureCategory(error);
+    const failureDetail = safeErrorMessage(error);
     await supabase.from('ussd_transfers')
       .update({status: definitiveFailure ? 'failed' : 'unknown', error_message: failureCategory}).eq('id', reservation.id);
-    console.error('Solana transfer failed:', failureCategory);
+    console.error('Solana transfer failed:', {category: failureCategory, detail: failureDetail});
     if (definitiveFailure) return reply('END', 'Error: Transfer rejected. No SOL was sent.');
     return reply('END', 'Error: Transfer status is uncertain. Do not retry; check your wallet.');
   }
